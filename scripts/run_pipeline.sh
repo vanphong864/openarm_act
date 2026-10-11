@@ -4,7 +4,7 @@
 # is missing (see scripts/train_pipeline.py), and resume=true continues a run.
 #
 #   scripts/run_pipeline.sh exp_name=v1
-#   scripts/run_pipeline.sh exp_name=v1 batch_size=32
+#   scripts/run_pipeline.sh exp_name=v1 batch_size=16          # less GPU memory
 #   scripts/run_pipeline.sh exp_name=v1 resume=true
 #   scripts/run_pipeline.sh exp_name=v1 backbone=resnet18
 #   scripts/run_pipeline.sh exp_name=v1 backbone=dinov2_vitb14 finetune=partial

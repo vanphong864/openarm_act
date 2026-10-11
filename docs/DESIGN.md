@@ -48,12 +48,58 @@ act_pipeline làm baseline, trong cùng code, cùng dữ liệu, cùng cách đ�
 
 ## 3. Kiến trúc
 
-```
- RGB [3,H,W] + depth [1,H,W] ─► RGB-D [4,h,w] ─► backbone ─► ~300 token ─┐
- qpos [16] ─────────────────────────────────────────► state token        ├─► encoder (4 lớp) ─► decoder (1 lớp, 50 query) ─► [50,16]
- (train) CVAE encoder([CLS, qpos, 50 action]) ─► z ──► latent token ─────┘
- (suy luận) z = 0
-```
+![Kiến trúc ACT + DINOv3 với input RGB-D](images/architecture.png)
+
+Hình vẽ cấu hình mặc định (`backbone=dinov3_vitb16 finetune=frozen
+data=openarm_rgbd`, khung 640×480); nguồn: [images/architecture.svg](images/architecture.svg).
+Viền mảnh là dữ liệu, viền đậm là phần được train, viền nét đứt là phần đóng
+băng, nền xám là phần chỉ có lúc train.
+
+### Input và output
+
+| | Tên | Kiểu, shape | Đơn vị, ý nghĩa |
+|---|---|---|---|
+| **Input** | `rgb` | uint8 [480, 640, 3] | ảnh màu camera ngực |
+| | `depth` | uint16 [480, 640] | mm, 0 = không đo được |
+| | `qpos` | float32 [16] | `left_j1..j7, left_gripper, right_j1..j7, right_gripper`; rad, gripper là hành trình ngón (m) |
+| **Chỉ lúc train** | `action` | float32 [50, 16] | nhãn: `qpos[t : t+50]`, cùng thứ tự và đơn vị |
+| | `action_is_pad` | bool [50] | các bước vượt quá cuối episode, bị loại khỏi loss |
+| **Output** | `actions` | float32 [50, 16] | target khớp tuyệt đối cho 50 bước (1 s ở 50 Hz); hàng 0 là bước lúc chụp quan sát |
+
+### Từng bước, với shape
+
+| Bước | Shape | Train? |
+|---|---|---|
+| RGB ÷255, chuẩn hoá ImageNet | [3, 480, 640] | — |
+| depth → m, kẹp 0.2–1.2 m, → 0..1 | [1, 480, 640] | — |
+| ghép thành RGB-D, resize bilinear | [4, 480, 640] → [4, 240, 320] | — |
+| patch embedding Conv2d(4→768, 16×16) | [300, 768] (+ CLS, 4 register) | có (lr 1e-5) |
+| DINOv3 ViT-B/16, 12 block, RoPE, LayerNorm cuối | [305, 768] | đóng băng |
+| bỏ CLS và register → feature map | [768, 15, 20] | — |
+| conv 1×1 768→512 + position 2D sin | 300 token × 512 | có |
+| qpos chuẩn hoá → Linear 16→512 | state token [1, 512] | có |
+| z (train: từ CVAE; suy luận: 0) → Linear 32→512 | latent token [1, 512] | có |
+| encoder Transformer 4 lớp, 8 head, FFN 3200 | [302, 512] | có |
+| 50 query (0 + position học được) → decoder 1 lớp | [50, 512] | có |
+| Linear 512→16 | [50, 16] (đã chuẩn hoá) | có |
+| bỏ chuẩn hoá (mean/std của action), + state nếu delta | [50, 16] tuyệt đối | — |
+
+Lúc train, CVAE encoder (4 lớp) đọc [CLS, qpos, a₀ … a₄₉] = 52 token, ra μ và
+log σ² (32 chiều), lấy mẫu z = μ + σ·ε. Loss = L1(dự đoán, nhãn, bỏ bước pad)
+\+ 10 · KL(N(μ, σ²) ‖ N(0, I)). Lúc suy luận không có CVAE, z = 0, nên cùng
+một quan sát luôn cho cùng một chunk.
+
+Số tham số: DINOv3 ViT-B/16 85.9M (đóng băng, trừ patch embedding 0.8M), phần
+ACT 40.5M train từ đầu, tổng 126.4M. Backbone khác chỉ đổi cột trái của hình:
+
+| Backbone | Ảnh vào model | Token ảnh | Lớp đầu 4 kênh |
+|---|---|---|---|
+| DINOv3 ViT/16 | 320×240 | 15×20 patch 16 px, 384–1024 chiều | patch embedding |
+| DINOv2 ViT/14 | 280×210 | 15×20 patch 14 px, 384–1024 chiều | patch embedding |
+| ResNet-18/34/50 | 640×480 (không resize) | map layer4 15×20, 512 / 2048 chiều | `conv1` (4→64) |
+
+Với `data=openarm_rgb_depth`, depth là ảnh thứ hai đi qua cùng backbone, thêm
+300 token (encoder thành 602 token); với `data=openarm_rgb` chỉ có RGB.
 
 Phần ACT là `ACTPolicy` của LeRobot, không sửa. `OpenArmACTPolicy`
 (`modeling_openarm_act.py`, đăng ký policy type `openarm_act`) chỉ đổi ba chỗ:
