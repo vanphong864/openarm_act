@@ -47,14 +47,7 @@ than an ImageNet ResNet; `backbone=resnet18` reproduces act_pipeline's backbone 
 
 Three machines are involved:
 
-```
- Robot PC (ROS 2 Humble, Python 3.10, no GPU)          GPU machine (Python 3.12, this repo)
- ─────────────────────────────────────────────         ─────────────────────────────────────────
- openarm_mc: teleop + recorder ── HDF5 ──► Hugging Face dataset ──► scripts/run_pipeline.sh
-                                                                     download → convert → norm stats → train
- openarm_act ROS node                                                  │
-   policy:=openarm_act_lerobot_client.policy:RemoteActPolicy ◄─────► scripts/serve.py  (websocket :8000)
-```
+![From recording to the robot](docs/images/system.png)
 
 The robot keeps running its existing `openarm_act` node (chunking, temporal ensembling,
 smoothing, safety limits); only the policy it loads changes, to a small client that asks this
@@ -72,19 +65,10 @@ episodes; 15 % are held out by a hash of their name, for offline evaluation.
 
 **Network.** LeRobot's ACT, with the backbone swapped in
 ([modeling_openarm_act.py](src/openarm_act_lerobot/modeling_openarm_act.py),
-[backbones.py](src/openarm_act_lerobot/backbones.py)):
+[backbones.py](src/openarm_act_lerobot/backbones.py)). The default model, with every shape
+(thin boxes: data; thick: trained; dashed: frozen; grey: training only):
 
-```
- RGB [3,H,W] ─┐                                                             training only
- depth [1,H,W]┴─► RGB-D [4,h,w] ─► backbone ─► ~300 image tokens ─┐     ┌─ CVAE encoder ◄─ 50 future actions
-   resized, normalised     (first layer widened to 4 channels)    │     │   z ~ N(μ, σ)    + state
-                                                                  ▼     ▼   (z = 0 at inference)
- qpos [16] ──────────────────────────────────────────► state token, latent token
-                                                                  │
-                                    transformer encoder (4 layers) over [z, state, image tokens]
-                                                                  │
-                         transformer decoder (50 queries, one per future step) ─► linear ─► [50, 16]
-```
+![ACT with a DINOv3 backbone and RGB-D input](docs/images/architecture.png)
 
 - The **backbone** turns the image into a grid of tokens: DINOv3's 16×16-pixel patches, DINOv2's
   14×14, or ResNet's 32×32-pixel layer4 cells. The frame is resized so each backbone makes about
