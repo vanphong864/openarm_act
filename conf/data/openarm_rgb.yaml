@@ -1,0 +1,37 @@
+# The chest camera's RGB only. The base of the other data configs: one dataset,
+# how the converter builds it and how training reads it.
+# convert.py and train.py compose the same file, so they cannot disagree.
+name: openarm_rgb
+manifest: manifests/episodes.yaml   # task / exclude / split per episode
+# ACT takes no prompt. The task still goes into the dataset (LeRobot wants
+# one per frame, and it keeps the datasets the same as openarm_smolvla's);
+# an episode without one gets fallback_task. true: refuse such episodes.
+require_task: false
+fallback_task: openarm teleop
+# Labels (see openarm_act_lerobot/episode.py): commands | next_qpos | qpos
+action_source: commands
+max_nan_fraction: 0.02          # more missing command rows than this: next_qpos
+min_frames: 50                  # shorter episodes are skipped
+fps: 50                         # must divide 50; 25 drops the camera's repeated frames
+repo_id: openarm/${data.name}_${data.action_source}_${data.fps}hz
+# [height, width] every frame must have; null: the episodes' own (the most
+# common one). openarm_mc recorded 640x480 before it moved to 424x240.
+image_size: null
+video: true                     # mp4 frames; false stores PNGs
+# The recorder's cameras ACT sees, in this order.
+cameras: [chest]
+# How chest_depth reaches the model, when it is among the cameras:
+#   image    a second, gray image through the backbone: its own ~300 tokens
+#   channel  the RGB image's 4th channel: one RGB-D image (data=openarm_rgbd),
+#            as act_pipeline feeds ACT
+depth_as: image
+depth_init: zero                # channel: the depth weights start at 0, or at the "mean" of RGB's
+# Arm joints as deltas from the state, grippers absolute. act_pipeline
+# trains on absolute targets.
+delta_actions: false
+image_transforms: false         # LeRobot's train-time augmentation (colour jitter, small shifts)
+# Held out for offline_eval.py besides the manifest's `split: val`, as
+# act_pipeline's val_split: this share of the episodes, picked by a hash.
+val_fraction: 0.0
+split_seed: 0
+max_episodes: null              # only the first N episodes under paths.raw, for a short run

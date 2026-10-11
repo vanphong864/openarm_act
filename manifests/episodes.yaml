@@ -1,0 +1,17 @@
+# Task, exclusions and the held-out split, per episode. See
+# src/openarm_act_lerobot/manifest.py. Episode ids are paths under paths.raw without
+# .hdf5, e.g. 2026-10-08/episode_20261008_104216.
+defaults:
+  task: null                    # optional for ACT (data.fallback_task otherwise)
+rules:
+  # Inferred from the camera frames (2026-10-09); confirm or reword.
+  - match: "data_openarm_8_10/*"
+    task: "pick up the green box and place it on the white paper"
+#  - match: "2026-10-08/*"
+#    task: "put the red block in the bowl"
+#  - match: "2026-10-09/episode_20261009_10*"
+#    exclude: true
+#    note: "camera stalled"
+#  - match: "2026-10-10/*"
+#    split: val                 # held out for offline_eval
+episodes: {}

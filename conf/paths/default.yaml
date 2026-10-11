@@ -1,0 +1,6 @@
+# Relative paths are relative to the repository root.
+raw: data/raw                   # openarm_mc's dataset/ copied here: <day>/episode_*.hdf5
+lerobot_home: data/lerobot      # HF_LEROBOT_HOME: converted datasets, <repo_id>/
+assets: assets                  # norm stats, shared by every run on the same data
+checkpoints: checkpoints        # <run name>/<exp_name>/checkpoints/<step>/
+releases: releases              # exported checkpoints, ready to serve

@@ -1,0 +1,11 @@
+# act_pipeline's recipe: the pretrained vision network stays frozen and the
+# first layer that sees depth trains (ResNet's conv1, a ViT's patch
+# embedding, widened to four channels). Everything ACT adds on top --
+# projections, CVAE, transformer -- trains from scratch.
+name: frozen
+load_backbone: true             # the backbone's pretrained weights; false: random (finetune=dummy)
+backbone_trainable: none        # none | last | all
+backbone_last_layers: 0         # with `last`: how many final ViT blocks (or ResNet stages) train
+train_patch_embedding: true     # only matters with depth_as=channel, where depth has to be learned
+lr_backbone: 1.0e-5             # the backbone's parameters, when any train
+gradient_checkpointing: false   # ViTs: recompute activations in the backward pass; less memory, slower

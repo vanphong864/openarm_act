@@ -1,0 +1,10 @@
+# DINOv2 ViT-B/14 (Meta, 2023; LVD-142M): 86M parameters, 768-d tokens, 14x14-pixel patches.
+# On Hugging Face, not gated: https://huggingface.co/facebook/dinov2-base
+# 0.35 GB of weights, fetched once into the Hugging Face cache.
+family: dinov2
+name: dinov2_vitb14
+repo: facebook/dinov2-base     # or a local directory holding config.json + model.safetensors
+revision: f9e44c814b77203eaa57a6bdbbd535f21ede1415
+# The normalisation it was pretrained with (preprocessor_config.json): ImageNet's.
+image_mean: [0.485, 0.456, 0.406]
+image_std: [0.229, 0.224, 0.225]

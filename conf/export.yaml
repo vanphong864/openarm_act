@@ -1,0 +1,20 @@
+# A trained checkpoint -> releases/<name>/: weights, processors, config,
+# metadata. What to keep and serve once a checkpoint is chosen.
+#   uv run scripts/export_policy.py checkpoint=checkpoints/act_dinov3_vitb16_frozen/v1/checkpoints/040000
+#   uv run scripts/export_policy.py checkpoint=... repo_id=<user>/openarm-act   # and upload
+defaults:
+  - paths: default
+  - _self_
+
+checkpoint: ???                 # a step directory, or a run directory (its newest step)
+name: null                      # null: <model>_<backbone>_<finetune>_<exp_name>_<step>
+dtype: float32                  # float32 (as trained) or bfloat16 (half the size)
+overwrite: false
+repo_id: null                   # a Hugging Face model repo to upload to; null: local only
+private: true                   # when the repo is created here
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: outputs/${hydra:job.name}/${now:%Y-%m-%d_%H-%M-%S}

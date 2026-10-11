@@ -1,0 +1,16 @@
+# Offline evaluation on the held-out episodes (split: val in the manifest):
+#   uv run scripts/offline_eval.py checkpoint=checkpoints/act_dinov3_vitb16_frozen/first
+checkpoint: ???
+split: val
+every: 10                       # predict a chunk every this many frames
+max_episodes: null
+device: auto
+paths:
+  raw: null                     # null: the raw directory of the run's config
+output: null                    # null: offline_eval_<split>.json beside the weights
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: outputs/${hydra:job.name}/${now:%Y-%m-%d_%H-%M-%S}

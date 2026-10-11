@@ -1,0 +1,9 @@
+# Every backbone weight trains, at lr_backbone (10x below ACT's), as
+# LeRobot's ACT trains its ResNet. The most
+# memory; with few episodes the likeliest to overfit. Try after frozen.
+defaults:
+  - frozen
+  - _self_
+
+name: full
+backbone_trainable: all

@@ -1,0 +1,21 @@
+# Recorded episodes from a Hugging Face dataset repo -> <paths.raw>/<folder>/:
+#   uv run scripts/download_dataset.py
+#   uv run scripts/download_dataset.py limit=2            # a first look
+#   uv run scripts/download_dataset.py repo_id=<user>/<another repo>
+defaults:
+  - paths: default
+  - _self_
+
+repo_id: Tuyen062004/data_openarm_8_10
+revision: main                  # a branch, tag or commit sha
+folder: null                    # null: the repo's name (data_openarm_8_10)
+patterns: ["*.hdf5"]
+limit: null                     # only the first N matching files (by name)
+max_workers: 4
+check: true                     # open every episode afterwards and report problems
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: outputs/${hydra:job.name}/${now:%Y-%m-%d_%H-%M-%S}

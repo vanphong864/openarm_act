@@ -1,0 +1,11 @@
+# DINOv3 ViT-S+/16 (Meta, 2025; LVD-1689M): 29M parameters, 384-d tokens, SwiGLU feed-forward.
+# Gated on Hugging Face: request access on https://huggingface.co/facebook/dinov3-vits16plus-pretrain-lvd1689m
+# (Meta approves by hand) and put an HF_TOKEN with read access in .env.
+# 0.11 GB of weights, fetched once into the Hugging Face cache.
+family: dinov3
+name: dinov3_vits16plus
+repo: facebook/dinov3-vits16plus-pretrain-lvd1689m     # or a local directory holding config.json + model.safetensors
+revision: c93d816fc9e567563bc068f01475bec89cc634a6
+# The normalisation it was pretrained with (preprocessor_config.json): ImageNet's.
+image_mean: [0.485, 0.456, 0.406]
+image_std: [0.229, 0.224, 0.225]

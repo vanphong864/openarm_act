@@ -1,0 +1,12 @@
+# ResNet-34: 22M parameters, 512-d features.
+# ACT's own backbone (LeRobot builds it): torchvision's ImageNet weights, from
+# download.pytorch.org into ~/.cache/torch, not gated. Its layer4 map has one
+# token per 32x32 pixels, so 640x480 frames go in unresized: 15x20 = 300
+# tokens, exactly act_pipeline's input.
+family: resnet
+name: resnet34
+arch: resnet34
+repo: ResNet34_Weights.IMAGENET1K_V1      # torchvision's weights name
+dilation: false                 # true: layer4 at stride 16, four times the tokens
+image_mean: [0.485, 0.456, 0.406]
+image_std: [0.229, 0.224, 0.225]

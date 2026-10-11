@@ -1,0 +1,13 @@
+# Serve a trained checkpoint over websocket for openarm_act's RemoteActPolicy:
+#   uv run scripts/serve.py checkpoint=checkpoints/act_dinov3_vitb16_frozen/first
+# The data pipeline comes from openarm_config.yaml inside the checkpoint,
+# the processors (stats, delta actions) from the checkpoint itself.
+checkpoint: ???                 # a release, a step, or a run directory (its newest step)
+port: 8000
+device: auto
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: outputs/${hydra:job.name}/${now:%Y-%m-%d_%H-%M-%S}

@@ -1,0 +1,27 @@
+# Data, norm stats, checkpoints: large, and specific to each machine and run.
+/data/
+/assets/
+/checkpoints/
+/releases/
+/outputs/
+/policy_records/
+/wandb/
+
+# Secrets: keys go in .env (template: .env.example).
+.env
+
+# Personal notes.
+GUIDE.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~

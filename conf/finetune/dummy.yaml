@@ -1,0 +1,16 @@
+# A tiny random backbone and ACT, no downloads: for checking the pipeline end
+# to end on a CPU (experiment=smoke). Learns nothing useful.
+defaults:
+  - frozen
+  - _self_
+
+name: dummy
+load_backbone: false
+backbone_trainable: all
+# The random ViT's size (the ResNets keep theirs); keys a family lacks are ignored.
+backbone_config:
+  hidden_size: 64
+  intermediate_size: 128
+  num_hidden_layers: 2
+  num_attention_heads: 2
+  num_register_tokens: 4

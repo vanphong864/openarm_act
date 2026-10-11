@@ -1,0 +1,45 @@
+[project]
+name = "openarm-act-lerobot"
+version = "0.1.0"
+description = "Train ACT (LeRobot) with a DINOv3, DINOv2 or ResNet backbone on OpenArm bimanual teleop data"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # ACT, the dataset format, training: LeRobot, one exact release. Its
+    # dataset format and processor API change between minor versions. The
+    # transformers extra brings DINOv2 and DINOv3.
+    "lerobot[dataset,training,transformers-dep]==0.6.1",
+    "hydra-core>=1.3.2",
+    "omegaconf>=2.3",
+    # Reading the HDF5 episodes openarm_mc's recorder writes: it writes with
+    # HDF5 2.0, which older h5py (HDF5 1.14) cannot read.
+    "h5py>=3.16",
+    "pyyaml>=6.0",
+    # Serving: openpi's websocket + msgpack protocol, as openarm_smolvla serves.
+    "websockets>=13",
+    "msgpack>=1.0",
+    # The robot-side client; the server shares its msgpack encoding.
+    "openarm-act-lerobot-client",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3.4"]
+
+[tool.uv.sources]
+openarm-act-lerobot-client = { path = "client", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openarm_act_lerobot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+tmp_path_retention_policy = "failed"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["client"]
