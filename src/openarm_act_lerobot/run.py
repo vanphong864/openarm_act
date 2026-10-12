@@ -120,6 +120,23 @@ def check_wandb(cfg: DictConfig) -> None:
     )
 
 
+def wandb_settings(cfg: DictConfig) -> dict[str, str]:
+    """What wandb uploads besides the metrics and the config, as the
+    environment variables wandb reads at wandb.init (LeRobot's WandBLogger
+    takes no settings): conf/train.yaml's wandb.console, system_metrics,
+    system_metrics_interval, save_requirements. A variable already set in
+    the shell wins."""
+    settings = {
+        "WANDB_CONSOLE": "auto" if cfg.wandb.get("console", True) else "off",
+        "WANDB__DISABLE_STATS": "false" if cfg.wandb.get("system_metrics", True) else "true",
+        "WANDB__STATS_SAMPLING_INTERVAL": str(float(cfg.wandb.get("system_metrics_interval", 15))),
+        "WANDB__SAVE_REQUIREMENTS": "true" if cfg.wandb.get("save_requirements", True) else "false",
+    }
+    for key, value in settings.items():
+        os.environ.setdefault(key, value)
+    return {key: os.environ[key] for key in settings}
+
+
 def fetch_lingbot_depth(cfg: DictConfig) -> str | None:
     """LingBot-Depth's model.pt (1.3 GB, not gated) into the Hugging Face
     cache, when the run uses it as depth encoder or teacher; -> where it is."""
@@ -218,10 +235,18 @@ def train(cfg: DictConfig) -> Path:
     # Every path is resolved here; LeRobot's own resolution reads sys.argv.
     train_cfg._resolve_pretrained_from_cli = lambda: None
 
+    wandb_settings(cfg)
     stats = None if resuming else load_norm_stats(stats_file)
     log.info("run directory: %s", out)
     with openarm_training(cfg, stats) as lerobot_train:
-        lerobot_train(train_cfg)
+        try:
+            lerobot_train(train_cfg)
+        finally:
+            if cfg.wandb.enable:  # LeRobot leaves the run open: flush and close it here
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.finish()
     return out
 
 

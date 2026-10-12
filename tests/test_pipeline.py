@@ -619,3 +619,47 @@ def test_msgpack_matches_openpi_encoding():
     assert back["b"] == 7 and back["b"].dtype == np.uint16 and back["s"] == "text"
     with pytest.raises(ValueError):
         msgpack_numpy.packb({"x": np.array([object()])})
+
+
+@pytest.mark.parametrize("console", [False, True])
+def test_wandb_uploads_only_what_is_asked(tmp_path, episode_factory, monkeypatch, console):
+    """An offline wandb run holds what an online one would upload: the metrics
+    and config always, the console output only when asked."""
+    import os
+
+    from openarm_act_lerobot.norm_stats import compute_norm_stats
+    from openarm_act_lerobot.run import train
+
+    for key in [k for k in os.environ if k.startswith("WANDB_")]:
+        monkeypatch.delenv(key)
+    monkeypatch.setenv("WANDB_API_KEY", "x" * 40)
+    _, overrides = _convert(tmp_path, episode_factory, "openarm_rgbd", extra=["data.video=false"])
+    cfg = compose_cfg(overrides=[*overrides, "experiment=smoke", "num_train_steps=4", "save_interval=4",
+                                 "wandb.enable=true", "wandb.mode=offline", f"wandb.console={str(console).lower()}"])
+    compute_norm_stats(cfg)
+    run = train(cfg)
+    records = _wandb_records(next((run / "wandb").glob("offline-run-*/run-*.wandb")))
+    assert records["history"] >= 2 and records["run"] == 1  # metrics and config
+    # The console output: none when off. When on, pytest's own capture of stdout
+    # keeps wandb from seeing it here, so only the setting is checked.
+    assert os.environ["WANDB_CONSOLE"] == ("auto" if console else "off")
+    if not console:
+        assert records["output_raw"] == 0
+    assert os.environ["WANDB__STATS_SAMPLING_INTERVAL"] == "60.0"
+
+
+def _wandb_records(path):
+    """Record kinds in an offline wandb run file -> counts."""
+    import collections
+
+    from wandb.proto import wandb_internal_pb2
+    from wandb.sdk.internal import datastore
+
+    store = datastore.DataStore()
+    store.open_for_scan(str(path))
+    kinds = collections.Counter()
+    while (data := store.scan_data()) is not None:
+        record = wandb_internal_pb2.Record()
+        record.ParseFromString(data)
+        kinds[record.WhichOneof("record_type")] += 1
+    return kinds

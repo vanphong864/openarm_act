@@ -181,6 +181,21 @@ that PyTorch can use the GPU, then runs [scripts/train_pipeline.py](scripts/trai
 Every step does only what is missing, so the same command resumes after an interruption. Add
 `resume=true` to continue the training run itself.
 
+**Several models overnight.** [scripts/train_overnight.sh](scripts/train_overnight.sh) trains
+ResNet-18, DINOv3, ResNet-18 + LingBot-Depth and DINOv3 + LingBot-Depth, then evaluates and
+exports each, and writes `outputs/overnight/<TAG>/summary.md` (status, time, arm RMSE against
+holding still, release). It prepares every run first, so a missing DINOv3 access or a full disk
+shows within minutes; one failing model does not stop the others; the same command again
+resumes what was interrupted.
+
+```bash
+tmux new -s night
+scripts/train_overnight.sh                        # one GPU, one model after another
+GPUS=0,1,2,3 scripts/train_overnight.sh           # one model per GPU, side by side
+DINO=dinov2 STEPS=20000 scripts/train_overnight.sh batch_size=16
+LINGBOT=--lingbot-depth-distill scripts/train_overnight.sh
+```
+
 Long runs belong in `tmux` (`tmux new -s act`; `Ctrl+B D` to detach, `tmux attach -t act` to
 return). On a machine with several GPUs, pick one:
 
@@ -310,6 +325,8 @@ Common options:
 | `data.max_episodes` | all | train on only the first N episodes under `data/raw/` |
 | `download.enable` | true | false: use only what is in `data/raw/` |
 | `wandb.enable` / `wandb.mode` | true / online | `offline` logs locally (`uv run wandb sync` later) |
+| `wandb.console` | false | true: also upload the whole console output (it stays in `outputs/` either way) |
+| `wandb.system_metrics` / `wandb.system_metrics_interval` | true / 60 | GPU, CPU and memory use, one sample a minute (wandb's default: 15 s) |
 
 Examples:
 
