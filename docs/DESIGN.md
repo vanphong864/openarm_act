@@ -6,11 +6,12 @@ hoặc **ResNet** của chính ACT — rồi chạy trên robot qua đúng stack
 SmolVLA ([openarm_smolvla](../../openarm_smolvla/docs/DESIGN.md)), π0/π0.5
 và LingBot đang dùng.
 
-> Trạng thái (11/10/2026): code đầy đủ từ dữ liệu tới robot. LeRobot pin ở
-> **0.6.1**, các repo backbone pin theo commit. Đã chạy thông trên CPU: 80
-> test (train → resume → export → serve → client với cả ba họ backbone), và
-> pipeline trên 2 episode thật 640×480 (convert → norm stats → train → offline
-> eval → export → serve → client). Chưa train thật trên GPU, chưa thử trọng số
+> Trạng thái (12/10/2026): code đầy đủ từ dữ liệu tới robot, cùng ba cách
+> xử lý depth mới (mục 3.4) và các cờ train (`--resnet`, `--dinov2`,
+> `--lingbot-depth`, ...). LeRobot pin ở **0.6.1**, các repo pin theo commit.
+> Đã chạy thông trên CPU: 108 test, và pipeline trên 2 episode thật 640×480
+> với trọng số thật của DINOv2-S và LingBot-Depth (`--lingbot-depth`,
+> `--lingbot-depth-distill`). Chưa train thật trên GPU, chưa thử trọng số
 > DINOv3 thật (repo gated, máy dev chưa có quyền).
 
 ---
@@ -161,6 +162,52 @@ một lớp ở trọng số ngẫu nhiên điều khiển tay robot.
 Lưu ý `frozen` với depth: gradient vẫn phải đi ngược qua toàn bộ ViT để tới
 patch embedding (như smolvla_rgbd). Thiếu bộ nhớ thì
 `finetune.gradient_checkpointing=true`.
+
+### 3.4 Depth: nhánh riêng và distill
+
+![ACT với nhánh depth và distill](images/architecture_depth.png)
+
+Cách mặc định ở trên (depth là kênh thứ 4) có ba vấn đề, nêu trong
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md): depth chỉ đi qua một lớp
+khởi tạo 0 trước một backbone đóng băng chỉ biết RGB; điểm không đo được bị
+coi là 0.2 m; depth lưu 8 bit rồi nén MP4. Repo có thêm:
+
+| Cờ train | `data.depth_as` | Depth vào mạng thế nào | Lúc suy luận |
+|---|---|---|---|
+| `--depth-branch` | `branch` | CNN nhỏ (~0.6M, train từ đầu, lr 1e-4) đọc [depth, valid], ra lưới token của backbone RGB, **cộng** vào feature map RGB | như lúc train |
+| `--lingbot-depth` | `branch` | LingBot-Depth ViT-L/14 (đóng băng) đọc RGB + depth, ra [1024, 15, 20], qua Conv1×1 (train) rồi cộng | thêm một ViT-L mỗi chunk |
+| `--lingbot-depth-distill` | `branch` (hoặc `none`) | như `--depth-branch`; thêm loss phụ lúc train: token ảnh ở đầu ra encoder ACT, qua LayerNorm + Linear 512→1024, dự đoán đặc trưng của LingBot-Depth cùng patch; loss += 0.1 · (1 − cos) | thầy không chạy, không lưu trong checkpoint |
+
+Những điểm thiết kế:
+
+- **Dữ liệu** (`data=openarm_rgbd_branch`, `depth_format: raw`): depth thô
+  lưu bằng feature depth của LeRobot (video HEVC 12 bit lượng tử log, không
+  mất mát; đọc lại theo mét, sai số dưới 1 mm trong 0.2–1.2 m). Giá trị 0 đọc
+  lại thành 0.01 m, nên mọi điểm < 0.1 m là "không đo được" (mask `valid`).
+  Lúc serve, depth uint16 của client đi qua `images.depth_to_metres`: cùng
+  tensor, cùng ngưỡng. Depth và mask resize nearest để không trộn điểm thiếu
+  với điểm thật.
+- **Khởi tạo 0:** lớp ra của nhánh depth (CNN hay Conv1×1 sau LingBot-Depth)
+  bằng 0, nên lúc đầu model y hệt bản chỉ RGB và depth được học thêm vào.
+- **Backbone RGB giữ nguyên 3 kênh**, không nới kênh: đặc trưng pretrain
+  không bị xáo trộn.
+- **Optimizer:** nhánh depth nằm trong `model.backbone.depth.*` nhưng học với
+  lr của ACT (1e-4), không phải lr của backbone (1e-5); có test kiểm.
+- **Distill** cần backbone RGB không học gì thêm (`frozen`) vẫn có tác dụng,
+  vì loss tác động vào encoder Transformer của ACT (được train), không phải
+  vào backbone. Thầy được tạo lần đầu khi train, đặt ngoài cây module
+  (không vào `state_dict`, không vào optimizer). `data.depth_as=none` cho học
+  sinh chỉ RGB: robot không cần camera depth lúc chạy.
+- **LingBot-Depth** (Apache 2.0) được chép phần encoder vào
+  `src/openarm_act_lerobot/lingbot_depth/` (xem `NOTICE.md`), so từng số với
+  code gốc trên một frame thật: giống hệt. Lúc dùng phải tắt việc che ngẫu
+  nhiên token depth (`enable_depth_mask=False`, mặc định của nó là che 60%).
+- **Lỗi tên khoá trong lingbot-vla-v2:** commit 311a4d2 của Robbyant đổi tên
+  lớp nhúng depth thành `depth_mask_patch_embed`, nhưng checkpoint
+  `lingbot-depth-pretrain-vitl-14` (revision 8a4b168) lưu `depth_patch_embed`;
+  nạp với `strict=False` thì lớp đó giữ trọng số ngẫu nhiên. Repo này nhận cả
+  hai tên và nạp bắt buộc khớp. openarm_lingbot (bản 2.0) dùng đúng code đó:
+  cần kiểm tra checkpoint thầy của nó có tên nào.
 
 ## 4. Dùng LeRobot thế nào
 

@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 
 from openarm_act_lerobot import constants as C
+from openarm_act_lerobot.images import depth_to_metres
 from openarm_act_lerobot.images import to_model_input
 from openarm_act_lerobot.run import checkpoint_step
 from openarm_act_lerobot.run import load_run_config
@@ -79,8 +80,14 @@ class OpenArmPolicy:
         if missing:
             raise KeyError(f"no image from camera(s) {missing}; got {sorted(images)}")
         batch = {C.LEROBOT_STATE: torch.from_numpy(state)}
+        raw_depth = str(self.run_cfg.data.get("depth_format") or "gray8") == "raw"
         for camera in self.cameras:
-            batch[C.LEROBOT_IMAGE_PREFIX + camera] = torch.from_numpy(to_model_input(images[camera]))
+            image = images[camera]
+            if camera == C.CAMERA_DEPTH and raw_depth:  # metres, as LeRobot's depth feature yields them
+                array = depth_to_metres(image)
+            else:
+                array = to_model_input(image)
+            batch[C.LEROBOT_IMAGE_PREFIX + camera] = torch.from_numpy(array)
         return batch
 
     def infer(self, obs: dict) -> dict:

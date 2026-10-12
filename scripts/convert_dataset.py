@@ -9,6 +9,7 @@
 import hydra
 from omegaconf import DictConfig
 
+from openarm_act_lerobot import cli
 from openarm_act_lerobot import paths
 
 
@@ -25,4 +26,5 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
+    cli.apply()  # --resnet, --dinov2, --lingbot-depth, ... (openarm_act_lerobot/cli.py)
     main()

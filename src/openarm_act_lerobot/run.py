@@ -120,6 +120,23 @@ def check_wandb(cfg: DictConfig) -> None:
     )
 
 
+def fetch_lingbot_depth(cfg: DictConfig) -> str | None:
+    """LingBot-Depth's model.pt (1.3 GB, not gated) into the Hugging Face
+    cache, when the run uses it as depth encoder or teacher; -> where it is."""
+    uses = [group for group in (cfg.depth_encoder, cfg.distill) if group.name == "lingbot_depth"]
+    if cfg.depth_encoder.name == "lingbot_depth" and str(cfg.data.get("depth_as")) != "branch":
+        uses = [group for group in uses if group is not cfg.depth_encoder]
+    if not uses or not cfg.finetune.load_backbone:
+        return None
+    repo = str(uses[0].repo)
+    if Path(paths.resolve(repo)).exists() and repo.startswith(("/", ".", "~")):
+        return str(paths.resolve(repo))
+    os.environ.pop("HF_HUB_OFFLINE", None)
+    from huggingface_hub import hf_hub_download
+
+    return hf_hub_download(repo, "model.pt", revision=uses[0].get("revision"))
+
+
 def fetch_backbone(cfg: DictConfig) -> str | None:
     """The pretrained backbone into its cache, before the dataset and the
     model load; -> where it is. The DINOv3 repos are gated: a refusal says
@@ -194,6 +211,7 @@ def train(cfg: DictConfig) -> Path:
         log.info("resuming from %s", checkpoint)
     else:
         fetch_backbone(cfg)
+        fetch_lingbot_depth(cfg)
         train_cfg = build_train_config(cfg, out)
     # The size the backbone sees, resolved from the frames: kept in openarm_config.yaml too.
     cfg.model.image_size = list(train_cfg.policy.image_size)

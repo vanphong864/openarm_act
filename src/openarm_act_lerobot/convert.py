@@ -24,6 +24,7 @@ import logging
 import shutil
 from pathlib import Path
 
+import numpy as np
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 
@@ -137,6 +138,14 @@ def features(cfg: DictConfig, image_size: tuple[int, int]) -> dict:
         C.LEROBOT_ACTION: {"dtype": "float32", "shape": (C.NUM_JOINTS,), "names": names},
     }
     for camera in used_cameras(cfg):
+        if raw_depth(cfg, camera):  # LeRobot's depth feature: 12-bit lossless video, read back in metres
+            out[C.LEROBOT_IMAGE_PREFIX + camera] = {
+                "dtype": mode,
+                "shape": (*image_size, 1),
+                "names": ["height", "width", "channels"],
+                "info": {"is_depth_map": True},
+            }
+            continue
         out[C.LEROBOT_IMAGE_PREFIX + camera] = {
             "dtype": mode,
             "shape": (*image_size, 3),
@@ -145,14 +154,27 @@ def features(cfg: DictConfig, image_size: tuple[int, int]) -> dict:
     return out
 
 
+def raw_depth(cfg: DictConfig, camera: str) -> bool:
+    """chest_depth stored as raw depth (data.depth_format=raw), not as a gray image."""
+    return camera == C.CAMERA_DEPTH and str(cfg.data.get("depth_format") or "gray8") == "raw"
+
+
+def frame_image(cfg: DictConfig, camera: str, image):
+    """One camera's frame as the dataset stores it."""
+    if raw_depth(cfg, camera):
+        return np.asarray(image, dtype=np.uint16)[..., None]  # mm; 0 = no reading
+    return parse_image(image)
+
+
 # The data settings that change what the converter writes.
-CONVERSION_KEYS = ("action_source", "max_nan_fraction", "min_frames", "fps", "video", "cameras")
+CONVERSION_KEYS = ("action_source", "max_nan_fraction", "min_frames", "fps", "video", "cameras", "depth_format")
 
 
 def signature(cfg: DictConfig, chosen: list[Planned]) -> dict:
     """What a converted dataset holds: settings, frame size, episodes and their tasks."""
     return json.loads(json.dumps({
-        "data": {key: OmegaConf.to_container(cfg.data, resolve=True)[key] for key in CONVERSION_KEYS},
+        "data": {key: OmegaConf.to_container(cfg.data, resolve=True).get(key, "gray8" if key == "depth_format" else None)
+                 for key in CONVERSION_KEYS},
         "image_size": list(chosen[0].image_size),
         "episodes": [[p.id, p.task] for p in chosen],
     }))
@@ -227,7 +249,7 @@ def convert(cfg: DictConfig) -> dict:
                         C.LEROBOT_TASK: item.task,
                     }
                     for camera in cameras:
-                        frame[C.LEROBOT_IMAGE_PREFIX + camera] = parse_image(episode.image(camera, index))
+                        frame[C.LEROBOT_IMAGE_PREFIX + camera] = frame_image(cfg, camera, episode.image(camera, index))
                     dataset.add_frame(frame)
             dataset.save_episode()
             converted.append({"id": item.id, "task": item.task, "frames": len(labels.indices),

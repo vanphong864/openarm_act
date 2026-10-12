@@ -49,20 +49,13 @@ Gửi: output của lệnh (hai danh sách phải giống nhau).
 ### A4. Trọng số kênh depth của R1
 
 ```bash
-uv run python - checkpoints/act_dinov3_vitb16_frozen/r1_rgbd/checkpoints/last/pretrained_model/model.safetensors <<'EOF'
-import sys
-from safetensors.torch import load_file
-w = load_file(sys.argv[1])
-key = next(k for k in w if k.endswith(("patch_embeddings.weight", "patch_embeddings.projection.weight", "body.conv1.weight")))
-norms = [float(w[key][:, c].norm()) for c in range(w[key].shape[1])]
-print(key, "| norm R, G, B, depth:", [round(v, 4) for v in norms])
-if len(norms) == 4:
-    print("depth / mean(RGB) =", round(norms[3] / (sum(norms[:3]) / 3), 4))
-EOF
+uv run scripts/inspect_checkpoint.py checkpoint=checkpoints/act_dinov3_vitb16_frozen/r1_rgbd
 ```
 
-Gửi: hai dòng lệnh in ra. Trọng số kênh depth bắt đầu từ 0; tỉ lệ còn rất
-nhỏ sau khi train nghĩa là model gần như không dùng depth.
+Gửi: các dòng lệnh in ra. Trọng số kênh depth bắt đầu từ 0; tỉ lệ
+`depth / mean(RGB)` còn rất nhỏ sau khi train nghĩa là model gần như không
+dùng depth. Với các run có nhánh depth (`--depth-branch`, `--lingbot-depth`,
+`--lingbot-depth-distill`), lệnh in thêm độ lớn lớp ra của nhánh depth (bắt đầu từ 0).
 
 ---
 

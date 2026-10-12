@@ -1,0 +1,17 @@
+# Depth with a network of its own (docs/IMPLEMENTATION_PLAN.md, stage 2):
+#
+#   data  raw depth, 12-bit lossless (LeRobot's depth feature), read back in
+#         metres; a reading under 0.1 m counts as none (valid mask)
+#   in    RGB through the backbone unchanged (3 channels); [depth, valid]
+#         through depth_encoder= (cnn, or lingbot_depth); feature maps added
+#   out   as openarm_rgbd: [50, 16] joint states, action[t : t + 50]
+defaults:
+  - openarm_rgb
+  - _self_
+
+name: openarm_rgbd_raw
+action_source: qpos
+cameras: [chest, chest_depth]
+depth_format: raw
+depth_as: branch
+val_fraction: 0.15

@@ -205,3 +205,143 @@ class ViTBackbone(Backbone):
         tokens = self.vit(pixel_values=image).last_hidden_state[:, self.num_prefix_tokens :]
         batch, _, channels = tokens.shape
         return tokens.transpose(1, 2).reshape(batch, channels, height, width)
+
+
+# ------------------------------------------------------------ depth branch
+
+
+def normalise_depth(depth_m: torch.Tensor, valid: torch.Tensor, config) -> torch.Tensor:
+    """Metres -> about zero-mean, unit-spread over depth_min_m..depth_max_m,
+    as the RGB channels after ImageNet normalisation; 0 where there is no reading."""
+    span = config.depth_max_m - config.depth_min_m
+    scaled = (depth_m.clamp(config.depth_min_m, config.depth_max_m) - config.depth_min_m) / span
+    return (scaled - 0.5) / 0.25 * valid
+
+
+class DepthEncoder(nn.Module):
+    """A small CNN from [normalised depth, valid] to the RGB backbone's token
+    grid: stride-2 convs, then pooled to (h, w) and projected to its width.
+    The projection starts at zero, so a fresh model reads RGB only."""
+
+    def __init__(self, out_channels: int, channels=(32, 64, 128, 256)):
+        super().__init__()
+        layers, width = [], 2
+        for c in channels:
+            layers += [nn.Conv2d(width, c, 3, stride=2, padding=1), nn.GroupNorm(8, c), nn.ReLU(inplace=True)]
+            width = c
+        self.convs = nn.Sequential(*layers)
+        self.proj = nn.Conv2d(width, out_channels, kernel_size=1)
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+
+    def forward(self, depth: torch.Tensor, valid: torch.Tensor, grid: tuple[int, int]) -> torch.Tensor:
+        x = self.convs(torch.cat([depth, valid], dim=1))
+        return self.proj(nn.functional.adaptive_avg_pool2d(x, grid))
+
+
+def lingbot_depth_state(repo: str, revision: str | None) -> dict:
+    """The encoder's weights from LingBot-Depth's model.pt (a Hub repo or a
+    file), keys as LingBotDepthEncoder names them. The published checkpoint
+    calls the depth patch embedding depth_patch_embed, lingbot-vla-v2's code
+    depth_mask_patch_embed: either loads."""
+    from pathlib import Path
+
+    path = Path(repo)
+    if path.is_dir():
+        path = path / "model.pt"
+    if not path.is_file():
+        from huggingface_hub import hf_hub_download
+
+        path = hf_hub_download(repo, "model.pt", revision=revision)
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    return {
+        key.removeprefix("encoder.").replace("depth_mask_patch_embed", "depth_patch_embed"): value
+        for key, value in checkpoint["model"].items()
+        if key.startswith("encoder.")
+    }
+
+
+class LingBotDepthEncoder(nn.Module):
+    """LingBot-Depth's RGB-D ViT-L/14 (lingbot_depth/, Apache 2.0), frozen.
+
+    rgb [B, 3, H, W] in 0..1 and depth [B, 1, H, W] in metres (0 = no
+    reading) -> its features [B, 1024, h, w] on the grid asked for: it resizes
+    the image to (14 h, 14 w) itself, normalises RGB with ImageNet's stats and
+    takes log depth. Its random masking of depth tokens, a pretraining
+    augmentation, is off. Always in eval mode, always without a graph.
+    """
+
+    def __init__(self, config, load_weights: bool):
+        super().__init__()
+        from openarm_act_lerobot.lingbot_depth.rgbd_encoder import DINOv2_RGBD_Encoder
+
+        self.encoder = DINOv2_RGBD_Encoder(**config.lingbot_depth_config)
+        if load_weights:
+            log.info("LingBot-Depth weights from %s@%s", config.lingbot_depth_repo, config.lingbot_depth_revision)
+            state = lingbot_depth_state(config.lingbot_depth_repo, config.lingbot_depth_revision)
+            missing, unexpected = self.encoder.load_state_dict(state, strict=False)
+            if missing or unexpected:
+                raise ValueError(f"LingBot-Depth checkpoint does not fit its encoder: missing {missing[:5]}, "
+                                 f"unexpected {unexpected[:5]}")
+        self.out_channels = int(config.lingbot_depth_config["dim_out"])
+        self.requires_grad_(False)
+        self.eval()
+
+    def train(self, mode: bool = True):
+        return super().train(False)
+
+    def forward(self, rgb: torch.Tensor, depth_m: torch.Tensor, grid: tuple[int, int]) -> torch.Tensor:
+        with torch.no_grad():
+            features, *_ = self.encoder(rgb.float(), depth_m.float(), int(grid[0]), int(grid[1]),
+                                        remap_depth_in="log", enable_depth_mask=False)
+        return features
+
+
+class LingBotDepthBranch(nn.Module):
+    """LingBot-Depth's features, projected to the RGB backbone's width by a
+    trained 1x1 conv that starts at zero."""
+
+    def __init__(self, out_channels: int, config, load_weights: bool):
+        super().__init__()
+        self.lingbot = LingBotDepthEncoder(config, load_weights)
+        self.proj = nn.Conv2d(self.lingbot.out_channels, out_channels, kernel_size=1)
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+
+    def forward(self, rgb: torch.Tensor, depth_m: torch.Tensor, grid: tuple[int, int]) -> torch.Tensor:
+        return self.proj(self.lingbot(rgb, depth_m, grid))
+
+
+class RGBDFusion(Backbone):
+    """depth_as=branch: the RGB backbone and a depth encoder side by side,
+    their feature maps added. Takes [rgb 0..1 (3) | depth m (1) | valid (1)]
+    at the model's image size; normalises RGB for the backbone itself."""
+
+    def __init__(self, rgb: Backbone, config, load_weights: bool):
+        super().__init__()
+        self.rgb = rgb
+        self.stride, self.hidden_size = rgb.stride, rgb.hidden_size
+        self.kind = config.depth_encoder
+        if self.kind == "cnn":
+            self.depth = DepthEncoder(rgb.hidden_size, config.depth_encoder_channels)
+        else:
+            self.depth = LingBotDepthBranch(rgb.hidden_size, config, load_weights)
+        self.config = config
+        self.register_buffer("mean", torch.tensor(config.image_mean).view(1, 3, 1, 1), persistent=False)
+        self.register_buffer("std", torch.tensor(config.image_std).view(1, 3, 1, 1), persistent=False)
+
+    def first_conv(self) -> nn.Conv2d:
+        return self.rgb.first_conv()
+
+    def blocks(self) -> list[nn.Module]:
+        return self.rgb.blocks()
+
+    def forward(self, image: torch.Tensor) -> dict[str, torch.Tensor]:
+        rgb, depth_m, valid = image[:, :3], image[:, 3:4], image[:, 4:5]
+        rgb_map = self.rgb((rgb - self.mean.to(rgb.dtype)) / self.std.to(rgb.dtype))["feature_map"]
+        grid = tuple(rgb_map.shape[-2:])
+        if self.kind == "cnn":
+            depth_map = self.depth(normalise_depth(depth_m, valid, self.config), valid, grid)
+        else:
+            depth_map = self.depth(rgb, depth_m * valid, grid)
+        return {"feature_map": rgb_map + depth_map.to(rgb_map.dtype)}

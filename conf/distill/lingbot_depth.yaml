@@ -1,0 +1,10 @@
+# Training only: the transformer encoder's image tokens learn, through a
+# linear head, to predict LingBot-Depth's RGB-D features of the same patches
+# (loss + weight * (1 - cosine)). The teacher reads RGB + raw depth and never
+# runs at inference; it is not saved in checkpoints.
+#   scripts/run_pipeline.sh exp_name=v1 --lingbot-depth-distill
+name: lingbot_depth
+suffix: _distill
+weight: 0.1
+repo: robbyant/lingbot-depth-pretrain-vitl-14     # or a directory / model.pt
+revision: 8a4b1682b966eced55a0edf5d2d8ac9b0db50740

@@ -33,6 +33,13 @@ def depth_to_image(depth_mm) -> np.ndarray:
     return np.repeat(gray[..., None], 3, axis=-1)
 
 
+def depth_to_metres(depth_mm) -> np.ndarray:
+    """Recorder depth (uint16 mm, 0 = no reading) -> float32 [1, H, W] in
+    metres: what LeRobot's depth feature yields in training (data.depth_format=raw)."""
+    depth_m = np.asarray(depth_mm, dtype=np.float32) / 1000.0
+    return np.nan_to_num(depth_m, nan=0.0, posinf=0.0, neginf=0.0)[None]
+
+
 def parse_image(image) -> np.ndarray:
     """uint8 [H, W, 3] from any layout the recorder, LeRobot or the client
     hands over: uint8 HWC, float CHW in 0..1, or a raw uint16 depth frame [H, W]."""

@@ -19,7 +19,7 @@ teleoperation episodes of the **OpenArm V1** bimanual arm, with a choice of visi
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Where everything is saved](#where-everything-is-saved)
-- [Configuration](#configuration)
+- [Configuration](#configuration) ([training flags](#training-flags))
 - [Step by step](#step-by-step)
 - [Evaluation and export](#evaluation-and-export)
 - [Serving to the robot](#serving-to-the-robot)
@@ -93,7 +93,16 @@ protocol; [policy.py](src/openarm_act_lerobot/policy.py) turns a raw observation
 exactly the processing training used. The client in [client/](client/) has openarm_act's policy
 interface (`predict(rgb, depth, qpos) -> [50, 16]`) and needs only numpy, msgpack and websockets.
 
-The reasons behind each choice, and what is still open: [docs/DESIGN.md](docs/DESIGN.md).
+**Depth, three more ways** (flags of the training scripts, [below](#training-flags)): raw depth
+stored losslessly with a mask of missing readings, read by a depth encoder of its own beside the
+RGB backbone — a small CNN (`--depth-branch`) or LingBot-Depth (`--lingbot-depth`) — or
+LingBot-Depth as a training-only teacher whose RGB-D features the encoder's image tokens learn to
+predict (`--lingbot-depth-distill`):
+
+![ACT with a depth branch and distillation](docs/images/architecture_depth.png)
+
+The reasons behind each choice, and what is still open: [docs/DESIGN.md](docs/DESIGN.md); the
+depth work and its experiments: [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
 ## Model
 
@@ -212,13 +221,53 @@ Other locations: `paths.raw=`, `paths.lerobot_home=`, `paths.assets=`, `paths.ch
 Settings live in [conf/](conf/) ([Hydra](https://hydra.cc)) and are overridden on the command
 line as `key=value`. The same overrides reach every step of the pipeline.
 
+### Training flags
+
+`run_pipeline.sh`, `smoke_train.sh`, `train.py`, `train_pipeline.py`, `convert_dataset.py`,
+`compute_norm_stats.py` and `inspect_dataset.py` also take these flags, shorthands for the
+overrides beside them ([cli.py](src/openarm_act_lerobot/cli.py)):
+
+| Flag | Same as | |
+|---|---|---|
+| `--resnet` | `backbone=resnet18` | act_pipeline's backbone |
+| `--dinov2` | `backbone=dinov2_vitb14` | not gated |
+| `--dinov3` | `backbone=dinov3_vitb16` | the default |
+| `--backbone NAME` | `backbone=NAME` | any of the backbones below |
+| `--depth-branch` | `data=openarm_rgbd_branch` | raw depth through a small CNN of its own |
+| `--lingbot-depth` | `data=openarm_rgbd_branch depth_encoder=lingbot_depth` | raw depth (and RGB) through LingBot-Depth, also at inference |
+| `--lingbot-depth-distill` | `data=openarm_rgbd_branch distill=lingbot_depth` | LingBot-Depth as a training-only teacher |
+
+A `data=` on the command line wins over the one a depth flag implies. Add
+`data.depth_as=none` to `--lingbot-depth-distill` for an RGB-only student (the robot then needs
+no depth camera at inference). `--lingbot-depth` and `--lingbot-depth-distill` exclude each
+other; an unknown flag is an error. Runs with these flags get their own folder:
+`act_<backbone>_<finetune>[_lingbotdepth|_distill]/<exp_name>`.
+
+```bash
+scripts/run_pipeline.sh exp_name=v1 --resnet --depth-branch
+scripts/run_pipeline.sh exp_name=v1 --dinov2 --lingbot-depth
+scripts/run_pipeline.sh exp_name=v1 --lingbot-depth-distill
+scripts/smoke_train.sh --lingbot-depth-distill          # the same flags as the real run
+```
+
+| | `--depth-branch` | `--lingbot-depth` | `--lingbot-depth-distill` |
+|---|---|---|---|
+| Extra network at inference | CNN, ~0.6M | LingBot-Depth ViT-L, 306M (frozen) | none |
+| Checkpoint size (ViT-S RGB backbone) | ~0.2 GB | ~1.4 GB | ~0.2 GB (the teacher is not saved) |
+| Extra download | none | 1.3 GB, not gated | 1.3 GB, not gated |
+| Training cost | small | a ViT-L forward per sample | a ViT-L forward per sample |
+
+### Groups and options
+
 | Group | Options | |
 |---|---|---|
 | `backbone` | **`dinov3_vitb16`**, `dinov3_vits16`, `dinov3_vits16plus`, `dinov3_vitl16` | DINOv3 (gated) |
 | | `dinov2_vits14`, `dinov2_vitb14`, `dinov2_vitl14` | DINOv2 |
 | | `resnet18`, `resnet34`, `resnet50` | ACT's own; `resnet18` is act_pipeline's |
 | `finetune` | **`frozen`**, `partial`, `full`, `dummy` | backbone frozen but its first layer; plus its last blocks; every weight; a tiny random network for CPU checks |
-| `data` | **`openarm_rgbd`**, `openarm_rgb`, `openarm_rgb_depth` | one 4-channel RGB-D image; RGB only; depth as a second image with its own tokens |
+| `data` | **`openarm_rgbd`**, `openarm_rgb`, `openarm_rgb_depth`, `openarm_rgbd_branch` | one 4-channel RGB-D image; RGB only; depth as a second image with its own tokens; raw lossless depth through a depth encoder of its own |
+| `depth_encoder` | **`cnn`**, `lingbot_depth` | with `openarm_rgbd_branch`: a small CNN trained from scratch, or LingBot-Depth (frozen) |
+| `distill` | **`none`**, `lingbot_depth` | LingBot-Depth as a training-only teacher |
 | `model` | **`act`** | chunk size, transformer sizes, KL weight, image size |
 | `experiment` | `smoke` | a 10-step CPU run of the whole pipeline |
 
@@ -266,7 +315,7 @@ Examples:
 
 ```bash
 scripts/run_pipeline.sh exp_name=try download.limit=10 data.max_episodes=10 num_train_steps=2000   # a short run
-scripts/run_pipeline.sh exp_name=v1 backbone=resnet18                          # the act_pipeline baseline
+scripts/run_pipeline.sh exp_name=v1 --resnet                                  # the act_pipeline baseline
 scripts/run_pipeline.sh exp_name=v1 backbone=dinov2_vitb14 finetune=partial    # DINOv2, last 4 blocks train
 scripts/run_pipeline.sh exp_name=v1 batch_size=16                              # less GPU memory
 scripts/run_pipeline.sh exp_name=v1 resume=true                                # continue v1
@@ -386,13 +435,16 @@ trip has to fit in the 20 ms of a step for that, or raise `query_period`. The se
 | `wandb is on but has no API key` | `WANDB_API_KEY` in `.env`, or `wandb.enable=false` |
 | `... exists; pass overwrite=true or resume=true` | the run name is taken: another `exp_name`, `resume=true`, or `overwrite=true` |
 | `... does not fit this network` when loading | the checkpoint and the code disagree (another backbone, an edited config); nothing is loaded half-way |
+| `unknown flag --...` | a typo in a flag; the known ones are in [Training flags](#training-flags) |
+| `... needs depth_format=raw` | depth branch and distillation read raw depth: use `data=openarm_rgbd_branch` (the depth flags pick it) |
+| slow steps with `--lingbot-depth` / `--lingbot-depth-distill` | LingBot-Depth is a ViT-L run on every sample; lower `batch_size` if memory runs out |
 | ROS's Python on `PYTHONPATH` breaks the environment | `env -u PYTHONPATH uv run ...` (the pipeline script does this) |
 | slow data loading, `pyav` in the log | `sudo apt install ffmpeg` |
 
 ## Development
 
 ```bash
-uv run pytest                          # CPU, ~5 min, no downloads: small random models trained, saved, served
+uv run pytest                          # CPU, ~7 min: small random models trained, saved, served
 scripts/smoke_train.sh                 # GPU, every step with the real backbone on 3 episodes
 uv run scripts/train_pipeline.py experiment=smoke download.limit=2   # the whole pipeline on a CPU, 10 steps
 ```
@@ -406,6 +458,7 @@ processors, checkpointing and serving, but nothing learned.
 conf/                    Hydra configs: pipeline, train, convert, inspect, eval, export, serve + groups
   backbone/              dinov3_*, dinov2_*, resnet*: where the weights come from, normalisation
   finetune/              frozen, partial, full, dummy: which backbone weights train
+  depth_encoder/ distill/ cnn | lingbot_depth; none | lingbot_depth
   data/  model/          the dataset's contents and labels; ACT's sizes
 manifests/episodes.yaml  exclusions and held-out episodes (and tasks, optional)
 scripts/                 run_pipeline.sh, smoke_train.sh and one entry point per step
@@ -414,11 +467,13 @@ src/openarm_act_lerobot/
   convert.py images.py          HDF5 -> LeRobot dataset; image and depth encoding
   norm_stats.py                 normalisation statistics
   train_config.py run.py        Hydra -> LeRobot configs; training
-  *_openarm_act.py backbones.py ACT with a DINOv3 / DINOv2 / ResNet backbone, RGB-D input
+  *_openarm_act.py backbones.py ACT with a DINOv3 / DINOv2 / ResNet backbone, depth branch, distillation
+  lingbot_depth/                LingBot-Depth's RGB-D encoder (Apache 2.0, vendored; see NOTICE.md)
+  cli.py                        --resnet, --dinov2, --lingbot-depth, ... -> Hydra overrides
   processors.py                 delta-action steps
   policy.py server.py           inference and the websocket server
   evaluate.py export.py         offline evaluation; releases
 client/                  openarm_act_lerobot_client: the robot-side policy (Python >= 3.10)
-docs/DESIGN.md           design notes (Vietnamese)
+docs/                    DESIGN.md (design notes), IMPLEMENTATION_PLAN.md (depth work), REPORT_TEMPLATE.md (Vietnamese); images/
 tests/
 ```

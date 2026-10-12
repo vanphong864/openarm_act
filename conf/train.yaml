@@ -9,11 +9,13 @@ defaults:
   - backbone: dinov3_vitb16
   - finetune: frozen
   - data: openarm_rgbd
+  - depth_encoder: cnn            # with data.depth_as=branch: cnn | lingbot_depth
+  - distill: none                 # none | lingbot_depth (training only)
   - _self_
   - optional experiment: null
 
 # checkpoints/<name>/<exp_name>/checkpoints/<step>/pretrained_model/
-name: ${model.name}_${backbone.name}_${finetune.name}
+name: ${model.name}_${backbone.name}_${finetune.name}${depth_encoder.suffix}${distill.suffix}
 exp_name: ${now:%Y%m%d_%H%M%S}
 
 device: auto                    # cuda when there is one, else cpu

@@ -26,6 +26,7 @@ import hydra
 from omegaconf import DictConfig
 from omegaconf import OmegaConf
 
+from openarm_act_lerobot import cli
 from openarm_act_lerobot import paths
 
 
@@ -45,6 +46,7 @@ def main(cfg: DictConfig) -> None:
     from openarm_act_lerobot.norm_stats import compute_norm_stats
     from openarm_act_lerobot.run import check_wandb
     from openarm_act_lerobot.run import fetch_backbone
+    from openarm_act_lerobot.run import fetch_lingbot_depth
     from openarm_act_lerobot.run import train
 
     step("1/6 wandb")
@@ -55,6 +57,9 @@ def main(cfg: DictConfig) -> None:
     where = fetch_backbone(cfg)
     print(f"{cfg.backbone.repo}: {where}" if where else f"not fetched (finetune={cfg.finetune.name}, "
           f"backbone.repo={cfg.backbone.repo})")
+    lingbot = fetch_lingbot_depth(cfg)
+    if lingbot:
+        print(f"LingBot-Depth: {lingbot}")
 
     step("3/6 episodes")
     download_cfg = OmegaConf.merge({"paths": cfg.paths}, cfg.download)
@@ -88,4 +93,5 @@ def main(cfg: DictConfig) -> None:
 
 
 if __name__ == "__main__":
+    cli.apply()  # --resnet, --dinov2, --lingbot-depth, ... (openarm_act_lerobot/cli.py)
     main()
