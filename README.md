@@ -406,13 +406,23 @@ publishing one.
 uv run scripts/serve.py checkpoint=releases/act_dinov3_vitb16_frozen_v1_040000 port=8000
 ```
 
-**On the robot computer**, install the client:
+**On the robot computer**, run the `openarm_act1` node of
+[openarm_mc](../openarm_mc) (`src/openarm_act1`): openarm_act's ROS node under another name,
+inherited and not changed, so other people's ACT runs as before. It asks the server for each
+chunk, keeps the joint states of the last 2 s and sends a model trained on a history
+(`model.state_steps`, 10 in `train_overnight.sh`) the last n at the model's rate:
 
 ```bash
-python3 -m pip install --user ./client
+ros2 launch openarm_act1 act1.launch.py act1_server:=ws://<gpu-host>:8000
+ros2 launch bringup bringup.launch.py enable_act1:=true act1_server:=ws://<gpu-host>:8000   # with the rest
 ```
 
-The client is a policy class with the interface openarm_act's policy node calls:
+On the dashboard, the **act1** source button brings up the **ACT1 Policy** card: Generate,
+Start, Execute, Stop and Reset, as on the ACT card. It commands the arm as the command proxy's
+`act1` source (`/openarm/act1/...`); the picture at the top of this page shows the whole path.
+
+For a script, or a policy node of your own, the same client is a package in [client/](client/)
+(`python3 -m pip install --user ./client`; numpy, msgpack, websockets, no torch):
 
 ```python
 from openarm_act_lerobot_client.policy import RemoteActPolicy
@@ -421,13 +431,8 @@ policy = RemoteActPolicy(checkpoint="ws://<gpu-host>:8000")
 actions = policy.predict(rgb, depth, qpos)
 #   rgb    uint8   [H, W, 3]
 #   depth  uint16  [H, W]   millimetres, 0 = no reading
-#   qpos   float32 [16]
+#   qpos   float32 [16], or [state_steps, 16] (oldest first) for a model trained on a history
 #   ->     float32 [50, 16] absolute joint targets
-```
-
-```bash
-ros2 launch openarm_act act.launch.py \
-    policy:=openarm_act_lerobot_client.policy:RemoteActPolicy checkpoint:=ws://<gpu-host>:8000
 ```
 
 On connecting, the client reads the model's chunk size, frame size and cameras from the server,

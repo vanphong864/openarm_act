@@ -52,7 +52,7 @@ class Svg:
         Path(path).write_text("\n".join(self.parts + ["</svg>", ""]))
 
 
-s = Svg(1420, 1220)
+s = Svg(1420, 1244)
 s.text(24, 28, "ACT với nhánh depth và distill  (--depth-branch, --lingbot-depth, --lingbot-depth-distill)",
        size=18, bold=True, anchor="start")
 for x, kind, label in ((24, "data", "dữ liệu"), (130, "trained", "được train"), (270, "frozen", "đóng băng (pretrained)")):
@@ -65,11 +65,11 @@ s.text(640, 55, "shape mỗi mẫu (không có chiều batch); khung 640×480, b
 # ------------------------------------------------------------------ inputs
 s.box(30, 80, 300, 52, ["chest RGB", "uint8 480×640×3"])
 s.box(370, 80, 300, 52, ["chest depth", "uint16 480×640 mm (0 = không đo)"])
-s.box(1090, 80, 145, 52, ["qpos", "float32 [16]"])
+s.box(1090, 80, 145, 52, ["qpos, last 10", "[10, 16], 50 Hz"])
 s.box(1245, 80, 145, 52, ["nhãn action", "[50, 16], khi train"])
 s.box(30, 160, 300, 56, ["÷255, resize bilinear", "[3, 240, 320]"])
 s.box(370, 160, 300, 56, ["mét; valid = depth > 0.1 m", "nearest → [2, 240, 320]"])
-s.box(1090, 160, 145, 56, ["chuẩn hoá", "mean / std"])
+s.box(1090, 160, 145, 56, ["chuẩn hoá", "flatten [160]"])
 s.box(1245, 160, 145, 56, ["CVAE → z [32]", "suy luận: z = 0"], "trained")
 for x in (180, 520, 1162, 1317):
     s.arrow((x, 132), (x, 158))
@@ -97,7 +97,7 @@ s.box(370, 516, 300, 56, ["conv 1×1 C→512 + 2D sin", "300 token ảnh [300, 5
 s.arrow((520, 492), (520, 514))
 
 # ------------------------------------------------------------ state, latent
-s.box(1090, 262, 145, 56, ["Linear 16→512", "token state"], "trained")
+s.box(1090, 262, 145, 56, ["Linear 160→512", "token state"], "trained")
 s.box(1245, 262, 145, 56, ["Linear 32→512", "token latent"], "trained")
 s.arrow((1162, 216), (1162, 260))
 s.arrow((1317, 216), (1317, 260))
@@ -141,6 +141,7 @@ notes = [
     "Không có cờ depth: depth là kênh thứ 4 của backbone (architecture.png). --lingbot-depth và --lingbot-depth-distill không dùng cùng lúc.",
     "Cờ backbone: --resnet (ResNet-18, ảnh 640×480 giữ nguyên, stride 32) · --dinov2 (ViT-B/14, 280×210) · --dinov3 (ViT-B/16, 320×240, mặc định).",
     "Distill cho học sinh RGB-only (robot không cần depth): thêm data.depth_as=none. Dữ liệu: data=openarm_rgbd_branch (depth thô, 12 bit, không mất mát).",
+    "Joint state: 10 bước gần nhất ở 50 Hz (model.state_steps=10, mặc định của train_overnight.sh), node openarm_act1 trên robot gửi lên.",
 ]
 for i, note in enumerate(notes):
     s.text(24, 1146 + 22 * i, note, size=13, anchor="start")
