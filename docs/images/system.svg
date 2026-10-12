@@ -1,36 +1,42 @@
-<svg width="1160" height="390" viewBox="0 0 1160 390" xmlns="http://www.w3.org/2000/svg">
+<svg width="1240" height="480" viewBox="0 0 1240 480" xmlns="http://www.w3.org/2000/svg">
 <defs><marker id="a" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto-start-reverse"><path d="M 0 1 L 8 4.5 L 0 8 Z" fill="#000"/></marker></defs>
-<rect x="0" y="0" width="1160" height="390" fill="#ffffff"/>
+<rect x="0" y="0" width="1240" height="480" fill="#fff"/>
 <text x="20" y="28" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#000" text-anchor="start" dominant-baseline="central">openarm_act: from recording to the robot</text>
-<rect x="20" y="50" width="400" height="320" rx="10" fill="#fff" stroke="#000" stroke-width="1.25" stroke-dasharray="3 4"/>
+<rect x="20" y="50" width="450" height="410" rx="10" fill="#fff" stroke="#000" stroke-width="1.25" stroke-dasharray="3 4"/>
 <text x="34" y="70" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="start" dominant-baseline="central">Robot PC  (ROS 2 Humble, Python 3.10, no GPU)</text>
-<rect x="750" y="50" width="390" height="320" rx="10" fill="#fff" stroke="#000" stroke-width="1.25" stroke-dasharray="3 4"/>
-<text x="764" y="70" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="start" dominant-baseline="central">GPU machine  (Python 3.12, this repo)</text>
-<rect x="40" y="100" width="360" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
-<text x="220.0" y="118.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">openarm_mc</text>
-<text x="220.0" y="137.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">teleop + recorder</text>
-<rect x="40" y="258" width="360" height="76" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
-<text x="220.0" y="277.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">openarm_act ROS node</text>
-<text x="220.0" y="296.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">policy: RemoteActPolicy</text>
-<text x="220.0" y="315.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">(openarm_act_lerobot_client)</text>
-<rect x="475" y="100" width="220" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
-<text x="585.0" y="118.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">Hugging Face dataset</text>
-<text x="585.0" y="137.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">HDF5 episodes</text>
-<rect x="770" y="100" width="350" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
-<text x="945.0" y="118.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">scripts/run_pipeline.sh</text>
-<text x="945.0" y="137.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">download → convert → norm stats → train</text>
-<rect x="770" y="186" width="350" height="44" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
-<text x="945.0" y="208.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">checkpoint → release (export_policy.py)</text>
-<rect x="770" y="258" width="350" height="76" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
-<text x="945.0" y="277.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">scripts/serve.py</text>
-<text x="945.0" y="296.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">websocket :8000</text>
-<text x="945.0" y="315.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">same preprocessing as training</text>
-<path d="M 400 128 L 473 128" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)"/>
-<text x="437" y="112" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">HDF5</text>
-<path d="M 695 128 L 768 128" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)"/>
-<path d="M 945 156 L 945 184" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)"/>
-<path d="M 945 230 L 945 256" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)"/>
-<path d="M 400 296 L 768 296" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)" marker-start="url(#a)"/>
-<text x="584" y="282" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">rgb, depth, qpos  →</text>
-<text x="584" y="312" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">←  actions [50, 16]</text>
+<rect x="790" y="50" width="430" height="410" rx="10" fill="#fff" stroke="#000" stroke-width="1.25" stroke-dasharray="3 4"/>
+<text x="804" y="70" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="start" dominant-baseline="central">GPU machine  (Python 3.12, this repo)</text>
+<rect x="40" y="96" width="410" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
+<text x="245.0" y="114.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">openarm_mc</text>
+<text x="245.0" y="133.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">teleop + recorder</text>
+<rect x="40" y="190" width="410" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
+<text x="245.0" y="208.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">openarm_ui: the ACT1 button</text>
+<text x="245.0" y="227.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">Generate · Start · Execute · Stop</text>
+<rect x="40" y="290" width="410" height="76" rx="6" fill="#fff" stroke="#000" stroke-width="3.5"/>
+<text x="245.0" y="309.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">openarm_act1 node (new)</text>
+<text x="245.0" y="328.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">openarm_act&#x27;s node, inherited, not changed</text>
+<text x="245.0" y="347.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">joint-state history at 50 Hz → the last 10 qpos</text>
+<text x="245" y="400" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">openarm_act node: unchanged, for the others&#x27; models</text>
+<text x="245" y="420" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">command proxy source act1 → the arm</text>
+<path d="M 245 246 L 245 288" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)"/>
+<rect x="520" y="96" width="220" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
+<text x="630.0" y="114.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">Hugging Face dataset</text>
+<text x="630.0" y="133.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">HDF5 episodes</text>
+<rect x="810" y="96" width="390" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
+<text x="1005.0" y="114.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">run_pipeline.sh · train_overnight.sh</text>
+<text x="1005.0" y="133.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">download → convert → norm stats → train</text>
+<rect x="810" y="190" width="390" height="44" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
+<text x="1005.0" y="212.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">checkpoint → release (export_policy.py)</text>
+<rect x="810" y="290" width="390" height="76" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
+<text x="1005.0" y="309.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">scripts/serve.py</text>
+<text x="1005.0" y="328.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">websocket :8000</text>
+<text x="1005.0" y="347.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">same preprocessing as training</text>
+<path d="M 450 124 L 518 124" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)"/>
+<text x="484" y="108" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">HDF5</text>
+<path d="M 740 124 L 808 124" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)"/>
+<path d="M 1005 152 L 1005 188" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)"/>
+<path d="M 1005 234 L 1005 288" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)"/>
+<path d="M 450 328 L 808 328" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)" marker-start="url(#a)"/>
+<text x="629" y="312" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">rgb, depth, last 10 qpos  →</text>
+<text x="629" y="344" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">←  actions [50, 16]</text>
 </svg>

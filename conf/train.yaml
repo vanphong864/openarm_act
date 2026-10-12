@@ -37,6 +37,12 @@ wandb:
   mode: online                  # online | offline (upload later: wandb sync) | disabled
   notes: null
   upload_checkpoints: false     # true: every checkpoint also goes to wandb as an artifact
+  # What else goes up, beside the metrics (log_interval) and the config:
+  console: false                # the whole console output, progress bars included; the training
+                                # log stays on disk anyway (outputs/<script>/<date_time>/)
+  system_metrics: true          # GPU/CPU/memory use (GPU memory: is batch_size too big?)
+  system_metrics_interval: 60   # seconds between samples (wandb's default: 15)
+  save_requirements: false      # the environment's package list (uv.lock pins it)
 
 lr:                             # LeRobot's CosineDecayWithWarmupSchedulerConfig; the backbone's
   warmup_steps: 1000            # group (finetune.lr_backbone) follows the same curve

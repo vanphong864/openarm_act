@@ -10,6 +10,9 @@ without touching openarm_act's code:
 It keeps ACT's contract (openarm_act/policy.py) exactly:
 
     predict(rgb uint8 [H, W, 3], depth uint16 [H, W] mm, qpos float32 [16])
+        (or qpos [state_steps, 16], the last joint states at the model's fps,
+         oldest first, for a model trained on a state history: state_steps
+         is read from the server, and the node asks for it)
         -> float32 [chunk, 16]  absolute targets, left j1..j7, left gripper,
                                 right j1..j7, right gripper; rad, grippers in m;
                                 actions[0] for the step the observation was taken at
@@ -91,6 +94,9 @@ class RemoteActPolicy:
         size = self.metadata.get("image_size")
         self.image_size = tuple(int(v) for v in size) if size else None
         self.send_depth = CAMERA_DEPTH in (self.metadata.get("cameras") or ())
+        # >1: predict() takes the last state_steps joint states, oldest first.
+        self.state_steps = int(self.metadata.get("state_steps") or 1)
+        self.fps = float(self.metadata.get("fps") or 50)  # the state history's rate
         self.clip = os.environ.get("OPENARM_ACT_CLIP", "1") != "0"
         self.server_ms = None
         self.round_trip_ms = None
@@ -126,7 +132,7 @@ class RemoteActPolicy:
             self._connect()
         observation = {
             "images": {CAMERA_RGB: np.ascontiguousarray(rgb, dtype=np.uint8)},
-            "state": np.asarray(qpos, dtype=np.float32).reshape(NUM_JOINTS),
+            "state": self._state(qpos),
         }
         if self.send_depth:
             observation["images"][CAMERA_DEPTH] = np.ascontiguousarray(depth, dtype=np.uint16)
@@ -146,6 +152,17 @@ class RemoteActPolicy:
             actions = np.clip(actions, V1_JOINT_LIMITS[:, 0], V1_JOINT_LIMITS[:, 1])
         return actions[: self.chunk_size]
 
+    def _state(self, qpos):
+        qpos = np.asarray(qpos, dtype=np.float32)
+        if self.state_steps == 1:
+            return qpos.reshape(NUM_JOINTS) if qpos.ndim == 1 else qpos[-1].reshape(NUM_JOINTS)
+        if qpos.shape != (self.state_steps, NUM_JOINTS):
+            raise ValueError(
+                f"this model reads the last {self.state_steps} joint states, [{self.state_steps}, {NUM_JOINTS}] "
+                f"oldest first; got {qpos.shape}. Update openarm_act (state_history) so the node sends them"
+            )
+        return np.ascontiguousarray(qpos)
+
     def reset(self):
         """Nothing to drop: every chunk comes from one observation alone."""
 
@@ -164,6 +181,7 @@ class RemoteActPolicy:
             f"RemoteActPolicy: {meta.get('model')}/{meta.get('backbone')}/{meta.get('finetune')}{step} "
             f"at ws://{self.host}:{self.port}, chunk {self.chunk_size} at {meta.get('fps')} Hz, "
             f"{'RGB-D' if self.send_depth else 'RGB'}"
+            + (f", last {self.state_steps} joint states" if self.state_steps > 1 else "")
             + (" (depth as 4th channel)" if meta.get("depth_as") == "channel" else "")
             + ("" if self.clip else ", V1 limits NOT enforced")
         )

@@ -70,6 +70,7 @@ def policy_overrides(cfg: DictConfig) -> dict:
         raise ValueError("finetune.backbone_trainable=last needs backbone_last_layers >= 1")
     return {
         "chunk_size": int(model.chunk_size),
+        "n_state_steps": int(model.get("state_steps") or 1),
         "n_action_steps": int(model.n_action_steps),
         "dim_model": int(model.dim_model),
         "n_heads": int(model.n_heads),
@@ -250,6 +251,8 @@ def policy_metadata(cfg: DictConfig) -> dict:
         "joint_names": list(C.JOINT_NAMES),
         "action_dim": C.NUM_JOINTS,
         "action_horizon": int(cfg.model.chunk_size),
+        # How many joint states predict() takes: the last n at `fps`, oldest first.
+        "state_steps": int(cfg.model.get("state_steps") or 1),
         "fps": int(cfg.data.fps),
         "model": str(cfg.model.name),
         "backbone": str(cfg.backbone.name),

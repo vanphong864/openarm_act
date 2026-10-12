@@ -14,6 +14,9 @@ Changes to LeRobot's ACTPolicy:
     optimizer       the pretrained backbone at optimizer_lr_backbone; what
                     trains from scratch (ACT, the depth CNN, projections, the
                     distillation head) at optimizer_lr.
+    state history   with n_state_steps > 1, the last n joint states [B, n, 16]
+                    flattened into ACT's one state token (and the CVAE's):
+                    its two state projections take 16 n inputs.
     distillation    with distill=lingbot_depth, in training only: the
                     transformer encoder's image tokens, through a linear
                     head, predict LingBot-Depth's features of the same
@@ -31,6 +34,7 @@ from safetensors.torch import load_file
 from torch import nn
 
 from lerobot.policies.act.modeling_act import ACTPolicy
+from lerobot.utils.constants import OBS_STATE
 from openarm_act_lerobot.backbones import LingBotDepthEncoder
 from openarm_act_lerobot.backbones import ResNetBackbone
 from openarm_act_lerobot.backbones import RGBDFusion
@@ -60,6 +64,11 @@ class OpenArmACTPolicy(ACTPolicy):
             super().__init__(config, **kwargs)
         finally:
             config.pretrained_backbone_weights = weights
+        if config.n_state_steps > 1 and config.robot_state_feature:
+            width = config.robot_state_feature.shape[0] * config.n_state_steps
+            self.model.encoder_robot_state_input_proj = nn.Linear(width, config.dim_model)
+            if config.use_vae:
+                self.model.vae_encoder_robot_state_input_proj = nn.Linear(width, config.dim_model)
         if not config.image_features:
             return
         if any(int(v) % config.backbone_stride for v in config.image_size):
@@ -200,8 +209,18 @@ class OpenArmACTPolicy(ACTPolicy):
 
     # ------------------------------------------------------------- forward
 
+    def prepare_state(self, batch: dict) -> dict:
+        """The state history [B, n, 16] -> [B, 16 n], oldest first."""
+        n = self.config.n_state_steps
+        state = batch.get(OBS_STATE)
+        if n == 1 or state is None:
+            return batch
+        if state.ndim != 3 or state.shape[1] != n:
+            raise ValueError(f"this model reads the last {n} joint states, [B, {n}, D]; got {tuple(state.shape)}")
+        return {**batch, OBS_STATE: state.flatten(1)}
+
     def forward(self, batch: dict) -> tuple[torch.Tensor, dict]:
-        batch = self.prepare_images(batch)
+        batch = self.prepare_images(self.prepare_state(batch))
         loss, loss_dict = super().forward(batch)
         if self.config.distill != "none" and self.training:
             distill = self.distill_loss(batch)
@@ -212,4 +231,4 @@ class OpenArmACTPolicy(ACTPolicy):
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict) -> torch.Tensor:
         self.eval()  # before prepare_images: no teacher inputs at inference
-        return super().predict_action_chunk(self.prepare_images(batch))
+        return super().predict_action_chunk(self.prepare_images(self.prepare_state(batch)))

@@ -18,7 +18,8 @@ from openarm_act_lerobot import cli
 from openarm_act_lerobot import paths
 
 
-@hydra.main(version_base="1.3", config_path="../conf", config_name="train")
+# conf/pipeline.yaml (= train.yaml + download/convert): takes every override run_pipeline.sh does.
+@hydra.main(version_base="1.3", config_path="../conf", config_name="pipeline")
 def main(cfg: DictConfig) -> None:
     paths.setup_env(cfg)
     from openarm_act_lerobot.run import train

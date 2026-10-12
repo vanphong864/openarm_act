@@ -42,7 +42,7 @@ from hydra import compose, initialize_config_dir
 from openarm_act_lerobot import paths
 from openarm_act_lerobot.cli import expand_flags
 with initialize_config_dir(version_base="1.3", config_dir=str(paths.CONF_DIR)):
-    cfg = compose(config_name="train", overrides=expand_flags(["smoke", *sys.argv[1:]])[1:])
+    cfg = compose(config_name="pipeline", overrides=expand_flags(["smoke", *sys.argv[1:]])[1:])
 print(f"{cfg.paths.checkpoints}/{cfg.name}/{cfg.exp_name}")
 PY
 )

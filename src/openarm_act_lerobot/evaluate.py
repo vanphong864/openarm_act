@@ -63,6 +63,14 @@ class ErrorTally:
         }
 
 
+def state_history(states: np.ndarray, t: int, steps: int) -> np.ndarray:
+    """states[t] (steps 1), or the last `steps` up to t, oldest first; before
+    the episode's start the first state repeats, as LeRobot pads in training."""
+    if steps == 1:
+        return states[t]
+    return states[[max(0, t - k) for k in range(steps - 1, -1, -1)]]
+
+
 def evaluate(cfg: DictConfig) -> dict:
     from openarm_act_lerobot.policy import OpenArmPolicy
 
@@ -89,7 +97,7 @@ def evaluate(cfg: DictConfig) -> dict:
             for start in range(0, len(labels.indices) - horizon + 1, every):
                 obs = {
                     "images": {camera: episode.image(camera, labels.indices[start]) for camera in cameras},
-                    "state": labels.state[start],
+                    "state": state_history(labels.state, start, policy.state_steps),
                 }
                 predicted = np.asarray(policy.infer(obs)["actions"], dtype=np.float64)[:horizon]
                 truth = labels.actions[start : start + horizon].astype(np.float64)

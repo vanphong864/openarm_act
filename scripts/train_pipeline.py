@@ -88,6 +88,10 @@ def main(cfg: DictConfig) -> None:
     step("5/6 norm stats")
     print(compute_norm_stats(cfg))
 
+    if cfg.prepare_only:
+        print(f"\nprepared for {cfg.name} (prepare_only=true): nothing trained")
+        return
+
     step("6/6 train")
     print(f"run finished: {train(cfg)}")
 

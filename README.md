@@ -181,6 +181,22 @@ that PyTorch can use the GPU, then runs [scripts/train_pipeline.py](scripts/trai
 Every step does only what is missing, so the same command resumes after an interruption. Add
 `resume=true` to continue the training run itself.
 
+**Several models overnight.** [scripts/train_overnight.sh](scripts/train_overnight.sh) trains
+ResNet-18, DINOv3, ResNet-18 + LingBot-Depth and DINOv3 + LingBot-Depth, each reading the last
+10 joint states (`STATE_STEPS=1` for the current one only), then evaluates and
+exports each, and writes `outputs/overnight/<TAG>/summary.md` (status, time, arm RMSE against
+holding still, release). It prepares every run first, so a missing DINOv3 access or a full disk
+shows within minutes; one failing model does not stop the others; the same command again
+resumes what was interrupted.
+
+```bash
+tmux new -s night
+scripts/train_overnight.sh                        # one GPU, one model after another
+GPUS=0,1,2,3 scripts/train_overnight.sh           # one model per GPU, side by side
+DINO=dinov2 STEPS=20000 scripts/train_overnight.sh batch_size=16
+LINGBOT=--lingbot-depth-distill scripts/train_overnight.sh
+```
+
 Long runs belong in `tmux` (`tmux new -s act`; `Ctrl+B D` to detach, `tmux attach -t act` to
 return). On a machine with several GPUs, pick one:
 
@@ -299,6 +315,7 @@ Common options:
 | `model.image_tokens` | 300 | tokens per image; the frame is resized to about this many |
 | `model.image_size` | null | `[height, width]` instead, multiples of the backbone's stride |
 | `model.kl_weight` | 10 | |
+| `model.state_steps` | 1 | the last n joint states as input (10: 0.2 s at 50 Hz); n > 1 needs openarm_act's node with `state_history` (it sends them), and the client checks |
 | `model.use_amp` | false | mixed precision |
 | `resume` | false | continue `exp_name` from its last checkpoint |
 | `device` | auto | `cuda` when available |
@@ -310,6 +327,8 @@ Common options:
 | `data.max_episodes` | all | train on only the first N episodes under `data/raw/` |
 | `download.enable` | true | false: use only what is in `data/raw/` |
 | `wandb.enable` / `wandb.mode` | true / online | `offline` logs locally (`uv run wandb sync` later) |
+| `wandb.console` | false | true: also upload the whole console output (it stays in `outputs/` either way) |
+| `wandb.system_metrics` / `wandb.system_metrics_interval` | true / 60 | GPU, CPU and memory use, one sample a minute (wandb's default: 15 s) |
 
 Examples:
 
@@ -387,13 +406,23 @@ publishing one.
 uv run scripts/serve.py checkpoint=releases/act_dinov3_vitb16_frozen_v1_040000 port=8000
 ```
 
-**On the robot computer**, install the client:
+**On the robot computer**, run the `openarm_act1` node of
+[openarm_mc](../openarm_mc) (`src/openarm_act1`): openarm_act's ROS node under another name,
+inherited and not changed, so other people's ACT runs as before. It asks the server for each
+chunk, keeps the joint states of the last 2 s and sends a model trained on a history
+(`model.state_steps`, 10 in `train_overnight.sh`) the last n at the model's rate:
 
 ```bash
-python3 -m pip install --user ./client
+ros2 launch openarm_act1 act1.launch.py act1_server:=ws://<gpu-host>:8000
+ros2 launch bringup bringup.launch.py enable_act1:=true act1_server:=ws://<gpu-host>:8000   # with the rest
 ```
 
-The client is a policy class with the interface openarm_act's policy node calls:
+On the dashboard, the **act1** source button brings up the **ACT1 Policy** card: Generate,
+Start, Execute, Stop and Reset, as on the ACT card. It commands the arm as the command proxy's
+`act1` source (`/openarm/act1/...`); the picture at the top of this page shows the whole path.
+
+For a script, or a policy node of your own, the same client is a package in [client/](client/)
+(`python3 -m pip install --user ./client`; numpy, msgpack, websockets, no torch):
 
 ```python
 from openarm_act_lerobot_client.policy import RemoteActPolicy
@@ -402,13 +431,8 @@ policy = RemoteActPolicy(checkpoint="ws://<gpu-host>:8000")
 actions = policy.predict(rgb, depth, qpos)
 #   rgb    uint8   [H, W, 3]
 #   depth  uint16  [H, W]   millimetres, 0 = no reading
-#   qpos   float32 [16]
+#   qpos   float32 [16], or [state_steps, 16] (oldest first) for a model trained on a history
 #   ->     float32 [50, 16] absolute joint targets
-```
-
-```bash
-ros2 launch openarm_act act.launch.py \
-    policy:=openarm_act_lerobot_client.policy:RemoteActPolicy checkpoint:=ws://<gpu-host>:8000
 ```
 
 On connecting, the client reads the model's chunk size, frame size and cameras from the server,

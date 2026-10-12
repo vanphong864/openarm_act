@@ -1,6 +1,6 @@
-<svg width="1420" height="1220" viewBox="0 0 1420 1220" xmlns="http://www.w3.org/2000/svg">
+<svg width="1420" height="1244" viewBox="0 0 1420 1244" xmlns="http://www.w3.org/2000/svg">
 <defs><marker id="a" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M 0 1 L 8 4.5 L 0 8 Z" fill="#000"/></marker></defs>
-<rect x="0" y="0" width="1420" height="1220" fill="#fff"/>
+<rect x="0" y="0" width="1420" height="1244" fill="#fff"/>
 <text x="24" y="28" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#000" text-anchor="start" dominant-baseline="central">ACT với nhánh depth và distill  (--depth-branch, --lingbot-depth, --lingbot-depth-distill)</text>
 <rect x="24" y="46" width="34" height="18" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
 <text x="66" y="55" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="start" dominant-baseline="central">dữ liệu</text>
@@ -19,8 +19,8 @@
 <text x="520.0" y="96.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">chest depth</text>
 <text x="520.0" y="115.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">uint16 480×640 mm (0 = không đo)</text>
 <rect x="1090" y="80" width="145" height="52" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
-<text x="1162.5" y="96.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">qpos</text>
-<text x="1162.5" y="115.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">float32 [16]</text>
+<text x="1162.5" y="96.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">qpos, last 10</text>
+<text x="1162.5" y="115.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">[10, 16], 50 Hz</text>
 <rect x="1245" y="80" width="145" height="52" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
 <text x="1317.5" y="96.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">nhãn action</text>
 <text x="1317.5" y="115.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">[50, 16], khi train</text>
@@ -32,7 +32,7 @@
 <text x="520.0" y="197.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">nearest → [2, 240, 320]</text>
 <rect x="1090" y="160" width="145" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="1.75"/>
 <text x="1162.5" y="178.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">chuẩn hoá</text>
-<text x="1162.5" y="197.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">mean / std</text>
+<text x="1162.5" y="197.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">flatten [160]</text>
 <rect x="1245" y="160" width="145" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="3.5"/>
 <text x="1317.5" y="178.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">CVAE → z [32]</text>
 <text x="1317.5" y="197.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">suy luận: z = 0</text>
@@ -75,7 +75,7 @@
 <text x="520.0" y="553.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">300 token ảnh [300, 512]</text>
 <path d="M 520 492 L 520 514" fill="none" stroke="#000" stroke-width="1.75" marker-end="url(#a)"/>
 <rect x="1090" y="262" width="145" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="3.5"/>
-<text x="1162.5" y="280.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">Linear 16→512</text>
+<text x="1162.5" y="280.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">Linear 160→512</text>
 <text x="1162.5" y="299.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#000" text-anchor="middle" dominant-baseline="central">token state</text>
 <rect x="1245" y="262" width="145" height="56" rx="6" fill="#fff" stroke="#000" stroke-width="3.5"/>
 <text x="1317.5" y="280.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#000" text-anchor="middle" dominant-baseline="central">Linear 32→512</text>
@@ -139,4 +139,5 @@
 <text x="24" y="1146" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="start" dominant-baseline="central">Không có cờ depth: depth là kênh thứ 4 của backbone (architecture.png). --lingbot-depth và --lingbot-depth-distill không dùng cùng lúc.</text>
 <text x="24" y="1168" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="start" dominant-baseline="central">Cờ backbone: --resnet (ResNet-18, ảnh 640×480 giữ nguyên, stride 32) · --dinov2 (ViT-B/14, 280×210) · --dinov3 (ViT-B/16, 320×240, mặc định).</text>
 <text x="24" y="1190" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="start" dominant-baseline="central">Distill cho học sinh RGB-only (robot không cần depth): thêm data.depth_as=none. Dữ liệu: data=openarm_rgbd_branch (depth thô, 12 bit, không mất mát).</text>
+<text x="24" y="1212" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="400" fill="#000" text-anchor="start" dominant-baseline="central">Joint state: 10 bước gần nhất ở 50 Hz (model.state_steps=10, mặc định của train_overnight.sh), node openarm_act1 trên robot gửi lên.</text>
 </svg>

@@ -8,6 +8,8 @@ defaults:
   - train
   - _self_
 
+prepare_only: false             # true: everything but the training (backbone, episodes, dataset, norm stats)
+
 download:
   enable: true                  # false: train on what is under paths.raw already
   repo_id: Tuyen062004/data_openarm_8_10

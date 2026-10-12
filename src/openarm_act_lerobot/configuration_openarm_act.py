@@ -71,6 +71,12 @@ class OpenArmACTConfig(ACTConfig):
             "ACTION": NormalizationMode.MEAN_STD,
         }
     )
+    # The joint states the model reads: the current one (1), or the last
+    # n_state_steps at the dataset's rate, oldest first (10 at 50 Hz: 0.2 s of
+    # motion). Flattened into ACT's one state token. An episode's first steps
+    # repeat its first state, as LeRobot pads them and the robot node does.
+    n_state_steps: int = 1
+
     backbone_type: str = "dinov3"
     # resnet: ACTConfig's vision_backbone ("resnet18", "resnet34", ...) and
     # pretrained_backbone_weights (a torchvision weights name). For the ViTs,
@@ -151,6 +157,8 @@ class OpenArmACTConfig(ACTConfig):
             if value not in allowed:
                 raise ValueError(f"{name} must be one of {allowed}, not {value!r}")
         self.image_size = tuple(int(v) for v in self.image_size)
+        if int(self.n_state_steps) < 1:
+            raise ValueError(f"n_state_steps must be at least 1, not {self.n_state_steps}")
         self.depth_encoder_channels = tuple(int(v) for v in self.depth_encoder_channels)
         if self.needs_raw_depth and self.depth_format != "raw":
             raise ValueError(f"depth_as={self.depth_as} / distill={self.distill} needs depth_format=raw "
