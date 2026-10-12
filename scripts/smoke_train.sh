@@ -8,7 +8,8 @@
 #   scripts/smoke_train.sh
 #   CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 scripts/smoke_train.sh
 #   scripts/smoke_train.sh batch_size=16          # extra Hydra overrides
-#   scripts/smoke_train.sh backbone=resnet18      # the same overrides as the real run
+#   scripts/smoke_train.sh --resnet               # the same flags/overrides as the real run
+#   scripts/smoke_train.sh --lingbot-depth
 #   scripts/smoke_train.sh wandb.enable=false     # without a wandb key
 #
 # Its outputs are named "smoke" and stay apart from real runs (wandb project
@@ -39,8 +40,9 @@ CHECKPOINT=$(uv run python - "${COMMON[@]}" <<'PY'
 import sys
 from hydra import compose, initialize_config_dir
 from openarm_act_lerobot import paths
+from openarm_act_lerobot.cli import expand_flags
 with initialize_config_dir(version_base="1.3", config_dir=str(paths.CONF_DIR)):
-    cfg = compose(config_name="train", overrides=sys.argv[1:])
+    cfg = compose(config_name="train", overrides=expand_flags(["smoke", *sys.argv[1:]])[1:])
 print(f"{cfg.paths.checkpoints}/{cfg.name}/{cfg.exp_name}")
 PY
 )

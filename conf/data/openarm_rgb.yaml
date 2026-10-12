@@ -24,8 +24,14 @@ cameras: [chest]
 #   image    a second, gray image through the backbone: its own ~300 tokens
 #   channel  the RGB image's 4th channel: one RGB-D image (data=openarm_rgbd),
 #            as act_pipeline feeds ACT
+#   branch   a depth encoder of its own beside the backbone (data=openarm_rgbd_branch)
+#   none     read only by the distillation teacher
 depth_as: image
 depth_init: zero                # channel: the depth weights start at 0, or at the "mean" of RGB's
+# How chest_depth is stored: gray8 (0.2..1.2 m as an 8-bit gray image, as
+# act_pipeline scales it; no reading lands on 0.2 m) or raw (metres, LeRobot's
+# lossless depth feature; branch/none and distillation need it).
+depth_format: gray8
 # Arm joints as deltas from the state, grippers absolute. act_pipeline
 # trains on absolute targets.
 delta_actions: false

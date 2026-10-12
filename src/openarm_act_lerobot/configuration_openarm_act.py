@@ -13,10 +13,20 @@ tokens where ResNet's layer4 feature map was:
 Everything else -- the CVAE, the encoder-decoder, the L1 + KL loss -- is
 LeRobot's ACT unchanged.
 
-With depth_as="channel", depth is the RGB image's 4th channel, as
-act_pipeline (OpenArm_MC) feeds ACT one [4, H, W] chest image: the
-backbone's first layer (ResNet's conv1, the ViT's patch embedding) takes
-four channels, the rest is as pretrained.
+How depth reaches the network (depth_as):
+
+    image    a camera of its own: the gray depth image through the backbone
+    channel  the RGB image's 4th channel, as act_pipeline (OpenArm_MC) feeds
+             ACT one [4, H, W] chest image: the backbone's first layer takes
+             four channels, the rest is as pretrained
+    branch   a depth encoder of its own beside the RGB backbone, its feature
+             map added to the RGB one (backbones.RGBDFusion): a small CNN
+             trained from scratch, or LingBot-Depth (depth_encoder)
+    none     not read by the policy; only the distillation teacher sees it
+
+distill="lingbot_depth" adds a training-only loss: the transformer
+encoder's image tokens learn to predict LingBot-Depth's RGB-D features of
+the same patches. The teacher never runs at inference.
 
 Registered with LeRobot as policy type "openarm_act". LeRobot finds the
 policy (modeling_openarm_act) and processors (processor_openarm_act) by this
@@ -32,7 +42,17 @@ from lerobot.configs import PolicyFeature
 from lerobot.policies.act.configuration_act import ACTConfig
 
 BACKBONE_TYPES = ("resnet", "dinov2", "dinov3")
-DEPTH_AS = ("image", "channel")
+DEPTH_AS = ("image", "channel", "branch", "none")
+DEPTH_FORMATS = ("gray8", "raw")
+DEPTH_ENCODERS = ("cnn", "lingbot_depth")
+DISTILL = ("none", "lingbot_depth")
+LINGBOT_DEPTH_REPO = "robbyant/lingbot-depth-pretrain-vitl-14"
+LINGBOT_DEPTH_REVISION = "8a4b1682b966eced55a0edf5d2d8ac9b0db50740"
+# The encoder of LingBot-Depth's published checkpoint (its model_config["encoder"]).
+LINGBOT_DEPTH_ENCODER = {
+    "backbone": "dinov2_vitl14", "intermediate_layers": 1, "dim_out": 1024, "strict": False,
+    "depth_emb_mode": "conv_1c", "img_depth_fuse_mode": "cat_token",
+}
 DEPTH_INITS = ("zero", "mean")
 BACKBONE_TRAINABLE = ("none", "last", "all")
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -86,10 +106,29 @@ class OpenArmACTConfig(ACTConfig):
     image_mean: tuple[float, float, float] = IMAGENET_MEAN
     image_std: tuple[float, float, float] = IMAGENET_STD
 
-    # How the depth camera reaches the backbone: "image", as a camera of its
-    # own (the dataset's gray encoding, normalised like RGB), or "channel", the
-    # RGB camera's 4th channel, 0..1 for 0.2..1.2 m as act_pipeline has it.
+    # How the depth camera reaches the network: image | channel | branch | none
+    # (module docstring).
     depth_as: str = "image"
+    # How the dataset stores depth: "gray8", 0.2..1.2 m as an 8-bit gray image
+    # (act_pipeline's scaling; 0 = no reading lands on 0.2 m), or "raw",
+    # metres as LeRobot's depth feature stores them (12-bit lossless video).
+    # branch and none need raw: a reading under depth_valid_min_m is "none".
+    depth_format: str = "gray8"
+    depth_min_m: float = 0.2
+    depth_max_m: float = 1.2
+    depth_valid_min_m: float = 0.1
+    # depth_as=branch: the depth encoder. "cnn": a small CNN trained from
+    # scratch; "lingbot_depth": LingBot-Depth's RGB-D ViT-L/14, frozen, with a
+    # trained 1x1 projection. Either one's output starts at zero, so a fresh
+    # model reads RGB only and learns depth in.
+    depth_encoder: str = "cnn"
+    depth_encoder_channels: tuple[int, ...] = (32, 64, 128, 256)
+    lingbot_depth_repo: str = LINGBOT_DEPTH_REPO
+    lingbot_depth_revision: str | None = LINGBOT_DEPTH_REVISION
+    lingbot_depth_config: dict = field(default_factory=lambda: dict(LINGBOT_DEPTH_ENCODER))
+    # Training-only distillation from LingBot-Depth (module docstring).
+    distill: str = "none"
+    distill_weight: float = 0.1
     rgb_key: str = "observation.images.chest"
     depth_key: str = "observation.images.chest_depth"
     # The 4th channel's first-layer weights when the pretrained ones have
@@ -103,12 +142,23 @@ class OpenArmACTConfig(ACTConfig):
         for name, value, allowed in (
             ("backbone_type", self.backbone_type, BACKBONE_TYPES),
             ("depth_as", self.depth_as, DEPTH_AS),
+            ("depth_format", self.depth_format, DEPTH_FORMATS),
+            ("depth_encoder", self.depth_encoder, DEPTH_ENCODERS),
+            ("distill", self.distill, DISTILL),
             ("depth_init", self.depth_init, DEPTH_INITS),
             ("backbone_trainable", self.backbone_trainable, BACKBONE_TRAINABLE),
         ):
             if value not in allowed:
                 raise ValueError(f"{name} must be one of {allowed}, not {value!r}")
         self.image_size = tuple(int(v) for v in self.image_size)
+        self.depth_encoder_channels = tuple(int(v) for v in self.depth_encoder_channels)
+        if self.needs_raw_depth and self.depth_format != "raw":
+            raise ValueError(f"depth_as={self.depth_as} / distill={self.distill} needs depth_format=raw "
+                             f"(metres, with readings to tell missing ones by), not {self.depth_format}")
+        if self.depth_as == "image" and self.depth_format != "gray8":
+            raise ValueError("depth_as=image passes the gray depth image through the backbone: depth_format=gray8")
+        if self.distill != "none" and self.depth_as == "branch" and self.depth_encoder == self.distill:
+            raise ValueError(f"{self.distill} is already the depth encoder; distilling it into itself adds nothing")
 
     @property
     def backbone_stride(self) -> int:
@@ -124,12 +174,16 @@ class OpenArmACTConfig(ACTConfig):
         return self.depth_as == "channel"
 
     @property
+    def needs_raw_depth(self) -> bool:
+        return self.depth_as in ("branch", "none") or self.distill != "none"
+
+    @property
     def image_features(self) -> dict[str, PolicyFeature]:
-        """The images ACT encodes. With depth_as=channel the depth camera is
+        """The images ACT encodes. Unless depth_as=image the depth camera is
         not one of them: it travels in the batch and is fused into the RGB
-        camera (OpenArmACTPolicy.prepare_images)."""
+        camera, or read by the teacher only (OpenArmACTPolicy.prepare_images)."""
         features = super().image_features
-        if self.depth_as_channel:
+        if self.depth_as != "image":
             features = {key: ft for key, ft in features.items() if key != self.depth_key}
         return features
 

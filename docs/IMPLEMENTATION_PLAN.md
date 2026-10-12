@@ -4,15 +4,22 @@ Mục tiêu: đưa depth vào model **sao cho model thực sự dùng được n
 số xem depth có giúp không, và chỉ đầu tư vào LingBot-Depth khi đã chứng minh
 được depth có ích.
 
+> **Trạng thái (12/10/2026):** code của Giai đoạn 1, 2, 3 và distill (mục 5b)
+> đã xong, có test (108 test qua trên CPU) và đã chạy thử với trọng số thật
+> trên 2 episode thật. Còn lại: các run trên GPU (R0–R4), đo tốc độ
+> LingBot-Depth trên GPU (3.1). Kiến trúc sau khi triển khai:
+> [images/architecture_depth.png](images/architecture_depth.png).
+
 Thứ tự làm: **Giai đoạn 0 (đo) → 1 (dữ liệu) → 2 (nhánh depth) → 3 (LingBot-Depth)**.
 Mỗi giai đoạn kết thúc bằng một quyết định đi tiếp hay dừng (mục 6).
 
 Kết quả cuối cùng, nhìn từ người dùng:
 
 ```bash
-scripts/run_pipeline.sh exp_name=v1                       # nhánh depth CNN nhỏ (sau giai đoạn 2)
-scripts/run_pipeline.sh exp_name=v1 --lingbot-depth       # nhánh depth là LingBot-Depth (giai đoạn 3)
-scripts/run_pipeline.sh exp_name=v1 backbone=dinov2_vitb14 --lingbot-depth   # kết hợp với mọi backbone RGB
+scripts/run_pipeline.sh exp_name=v1 --depth-branch          # nhánh depth CNN nhỏ (giai đoạn 2)
+scripts/run_pipeline.sh exp_name=v1 --lingbot-depth         # nhánh depth là LingBot-Depth (giai đoạn 3)
+scripts/run_pipeline.sh exp_name=v1 --lingbot-depth-distill # LingBot-Depth chỉ làm thầy lúc train (mục 5b)
+scripts/run_pipeline.sh exp_name=v1 --resnet --lingbot-depth   # kết hợp với cờ backbone: --resnet, --dinov2, --dinov3
 ```
 
 ---
@@ -44,7 +51,7 @@ dataset, **tập val**, nhãn, backbone, số bước, batch size, lr, seed.
 
 ### Việc cần làm
 
-- [ ] **0.1 Script `scripts/inspect_checkpoint.py checkpoint=...`:** đọc
+- [x] **0.1 Script `scripts/inspect_checkpoint.py checkpoint=...`:** đọc
   `model.safetensors`, in chuẩn L2 của trọng số lớp đầu theo từng kênh đầu
   vào (R, G, B, depth) và tỉ lệ `‖depth‖ / mean(‖RGB‖)`. Với ResNet đọc
   `model.backbone.body.conv1.weight`, với ViT đọc lớp patch embedding (dùng
@@ -97,38 +104,41 @@ mm (`DepthEncoderConfig`, `dequantize_depth`). Dùng kiểu này thay cho ảnh 
 
 ### Việc cần làm
 
-- [ ] **1.1 Kiểm tra trước (nửa giờ):** viết một test nhỏ ghi rồi đọc lại
+- [x] **1.1 Kiểm tra trước (nửa giờ):** *Kết quả: sai số < 1 mm trong
+  0.2–1.2 m; giá trị 0 đọc lại thành 0.01 m (giới hạn dưới của bộ lượng tử),
+  nên ngưỡng `depth_valid_min_m = 0.1` tách được điểm thiếu, không cần feature
+  mask riêng. Chế độ ảnh (`data.video=false`) giữ chính xác tuyệt đối.* viết một test nhỏ ghi rồi đọc lại
   một frame depth qua `LeRobotDataset` với `is_depth_map`. Xác nhận: (a) sai
   số giải mã trong khoảng 0.2–1.2 m, (b) **giá trị 0 được giữ là 0** (hoặc
   nhận ra được) sau khi lượng tử hoá log, (c) backend `pyav` đọc được (LeRobot
   chỉ giải mã depth bằng pyav). Nếu (b) không đạt thì lưu thêm một feature
   mask riêng dạng ảnh.
-- [ ] **1.2 `conf/data/`:** thêm `depth_format: gray8 | raw`
+- [x] **1.2 `conf/data/`:** thêm `depth_format: gray8 | raw`
   (`gray8` = như hiện tại, giữ để so sánh) và dataset mới
   `conf/data/openarm_rgbd_raw.yaml` (`depth_format: raw`). `repo_id` khác nên
   dataset cũ không bị ghi đè.
-- [ ] **1.3 `convert.py`:** `features()` khai báo `chest_depth` với
+- [x] **1.3 `convert.py`:** `features()` khai báo `chest_depth` với
   `shape (H, W, 1)` và `info: {is_depth_map: true}` khi `depth_format=raw`;
   vòng lặp ghi frame đưa thẳng `episode.depth(index)` (uint16) vào. Thêm
   `depth_format` vào `CONVERSION_KEYS` để dataset cũ không bị dùng lại nhầm.
-- [ ] **1.4 `images.py`:** thêm `depth_to_metres(depth_mm) -> float32 [1, H, W]`
+- [x] **1.4 `images.py`:** thêm `depth_to_metres(depth_mm) -> float32 [1, H, W]`
   cho đường serve, khớp từng giá trị với cách LeRobot giải mã lúc train.
-- [ ] **1.5 `policy.py`:** khi `depth_format=raw`, đưa depth của client vào
+- [x] **1.5 `policy.py`:** khi `depth_format=raw`, đưa depth của client vào
   batch theo `depth_to_metres` thay cho `to_model_input`.
-- [ ] **1.6 `modeling_openarm_act.py` (`prepare_images`):** đọc depth theo mét,
+- [x] **1.6 `modeling_openarm_act.py` (`prepare_images`):** đọc depth theo mét,
   tính `valid`, chuẩn hoá như trên, gán 0 ở chỗ không hợp lệ. Thêm
   `depth_format` vào `OpenArmACTConfig` để checkpoint tự biết cách đọc.
-- [ ] **1.7 `train_config.py`:** dataset depth thô cần `video_backend=pyav`
+- [x] **1.7 `train_config.py`:** dataset depth thô cần `video_backend=pyav`
   cho feature depth. Kiểm tra `DatasetConfig.depth_output_unit = "m"`.
 
 ### Test
 
-- [ ] Convert episode giả rồi đọc lại: depth sau giải mã khớp HDF5 trong sai số
+- [x] Convert episode giả rồi đọc lại: depth sau giải mã khớp HDF5 trong sai số
   lượng tử (dự kiến dưới 1 mm ở 1 m), pixel 0 vẫn là không hợp lệ.
-- [ ] `policy.infer` với depth thô từ client cho kết quả **giống hệt** batch
+- [x] `policy.infer` với depth thô từ client cho kết quả **giống hệt** batch
   lấy từ dataset (train và serve không lệch nhau).
-- [ ] Ảnh depth có lỗ: chỗ lỗ ra 0 sau chuẩn hoá, không phải giá trị "gần".
-- [ ] Toàn bộ test cũ vẫn qua (`depth_format=gray8` không đổi hành vi).
+- [x] Ảnh depth có lỗ: chỗ lỗ ra 0 sau chuẩn hoá, không phải giá trị "gần".
+- [x] Toàn bộ test cũ vẫn qua (`depth_format=gray8` không đổi hành vi).
 
 ### Hoàn thành khi
 
@@ -157,35 +167,35 @@ Sửa vấn đề A: depth có encoder riêng, được học đầy đủ.
 
 ### Việc cần làm
 
-- [ ] **2.1 `configuration_openarm_act.py`:** `depth_as` thêm giá trị
+- [x] **2.1 `configuration_openarm_act.py`:** `depth_as` thêm giá trị
   `"branch"`; thêm `depth_encoder: str = "cnn"` (giai đoạn 3 thêm
   `"lingbot_depth"`) và `depth_encoder_channels: tuple = (32, 64, 128, 256)`.
   `image_features` bỏ depth_key khi `depth_as` là `channel` hoặc `branch`.
   `image_channels` = 3 khi `branch`.
   Hydra: nhóm mới `conf/depth_encoder/cnn.yaml` (mặc định), để giai đoạn 3 chỉ
   cần thêm một file cùng nhóm.
-- [ ] **2.2 `backbones.py`:** class `DepthEncoder(nn.Module)`:
+- [x] **2.2 `backbones.py`:** class `DepthEncoder(nn.Module)`:
   `forward(depth [B,2,H,W], grid (h, w)) -> [B, C, h, w]`.
-- [ ] **2.3 `backbones.py` + `modeling_openarm_act.py`:** module
+- [x] **2.3 `backbones.py` + `modeling_openarm_act.py`:** module
   `RGBDFusion(Backbone)` gồm `self.rgb` (backbone RGB như cũ) và `self.depth`
   (`DepthEncoder`), gắn vào chỗ `self.model.backbone`, nên `ACT.forward` của
   LeRobot không phải sửa. Nó nhận một tensor 5 kênh
   `[rgb(3) | depth(1) | valid(1)]`, tách ra, chạy hai nhánh, cộng hai feature
   map. `prepare_images` tạo tensor 5 kênh đó (chỉ resize, chuẩn hoá phần RGB).
-- [ ] **2.4 `get_optim_params`:** LeRobot chia nhóm theo tiền tố
+- [x] **2.4 `get_optim_params`:** LeRobot chia nhóm theo tiền tố
   `model.backbone`, nên `model.backbone.depth.*` sẽ rơi vào nhóm lr 1e-5.
   Override để đưa chúng về nhóm chính (lr 1e-4); có test kiểm tra.
-- [ ] **2.5 `conf/data/openarm_rgbd_branch.yaml`:** `depth_format: raw`,
+- [x] **2.5 `conf/data/openarm_rgbd_branch.yaml`:** `depth_format: raw`,
   `depth_as: branch`; đổi thành mặc định nếu R2 thắng.
-- [ ] **2.6 Sơ đồ:** cập nhật `docs/images/architecture.svg` và `DESIGN.md`.
+- [x] **2.6 Sơ đồ:** cập nhật `docs/images/architecture.svg` và `DESIGN.md`.
 
 ### Test
 
-- [ ] Shape: feature map ghép bằng shape của RGB cho cả 3 họ backbone.
-- [ ] Khởi tạo: output **bằng hệt** model RGB-only khi tầng cuối DepthEncoder = 0.
-- [ ] Sau khi chỉnh trọng số DepthEncoder: đổi depth thì output đổi.
-- [ ] Nhóm optimizer: DepthEncoder ở lr 1e-4, backbone RGB đóng băng hoàn toàn (không còn nới 4 kênh).
-- [ ] Train 4 bước trên CPU rồi resume, lưu/nạp checkpoint strict, export, serve offline.
+- [x] Shape: feature map ghép bằng shape của RGB cho cả 3 họ backbone.
+- [x] Khởi tạo: output **bằng hệt** model RGB-only khi tầng cuối DepthEncoder = 0.
+- [x] Sau khi chỉnh trọng số DepthEncoder: đổi depth thì output đổi.
+- [x] Nhóm optimizer: DepthEncoder ở lr 1e-4, backbone RGB đóng băng hoàn toàn (không còn nới 4 kênh).
+- [x] Train 4 bước trên CPU rồi resume, lưu/nạp checkpoint strict, export, serve offline.
 
 ### Hoàn thành khi
 
@@ -235,7 +245,9 @@ vậy cờ được **đổi thành override Hydra trước khi Hydra đọc `sy
 
 ### Việc cần làm
 
-- [ ] **3.1 Khảo sát (trước khi code):**
+- [ ] **3.1 Khảo sát (trước khi code):** *Đã đọc code và giấy phép (Apache 2.0),
+  đã kiểm bản chép giống hệt code gốc. Tốc độ: trên CPU ~5 s/chunk; **trên GPU chưa đo**
+  (đo bằng `scripts/smoke_train.sh --lingbot-depth`, xem `server_ms`).*
   - Đọc code của nó (trong `third_party/lingbot-vla` của openarm_lingbot, hoặc
     repo gốc): input chính xác (kích thước, chuẩn hoá RGB, đơn vị depth, cách
     đánh dấu chỗ thiếu), output nào là token đặc trưng, cách nạp `model.pt`.
@@ -243,40 +255,63 @@ vậy cờ được **đổi thành override Hydra trước khi Hydra đọc `sy
   - Đo tốc độ một forward ở lưới 15×20, batch 1, trên GPU server. Ghi số đo
     vào README: nếu round trip (server + mạng) vượt **20 ms/bước** thì robot
     phải hỏi thưa hơn (`query_period` > 1).
-- [ ] **3.2 `backbones.py`:** `LingBotDepthEncoder(nn.Module)`, cùng giao
+- [x] **3.2 `backbones.py`:** `LingBotDepthEncoder(nn.Module)`, cùng giao
   diện với `DepthEncoder` của giai đoạn 2:
   `forward(rgb, depth, valid, grid) -> [B, C, h, w]`; nạp trọng số từ Hub theo
   revision ghim. Vendor phần code mô hình tối thiểu (kèm license), không phụ
   thuộc cả repo LingBot.
-- [ ] **3.3 `conf/depth_encoder/lingbot_depth.yaml`:** `name: lingbot_depth`,
+- [x] **3.3 `conf/depth_encoder/lingbot_depth.yaml`:** `name: lingbot_depth`,
   `suffix: _lingbotdepth`, `repo`, `revision`, kích thước ảnh vào.
   `conf/train.yaml`: `name: act_${backbone.name}_${finetune.name}${depth_encoder.suffix}`
   (`cnn.yaml` có `suffix: ""`).
-- [ ] **3.4 `src/openarm_act_lerobot/cli.py`:** `FLAGS = {"--lingbot-depth": [...]}`
+- [x] **3.4 `src/openarm_act_lerobot/cli.py`:** `FLAGS = {"--lingbot-depth": [...]}`
   và `expand_flags(argv) -> argv`. Gọi `sys.argv = expand_flags(sys.argv)` ở đầu
   `scripts/train.py`, `train_pipeline.py`, `compute_norm_stats.py`,
   `convert_dataset.py`, trước `main()`.
-- [ ] **3.5 Script bash:** `run_pipeline.sh` đã chuyển `"$@"` sang Python nên
+- [x] **3.5 Script bash:** `run_pipeline.sh` đã chuyển `"$@"` sang Python nên
   tự có cờ. `smoke_train.sh`: đoạn Python tính thư mục checkpoint cũng gọi
   `expand_flags`. Thêm ví dụ `--lingbot-depth` vào phần chú thích đầu file.
-- [ ] **3.6 `run.py`:** `fetch_backbone` tải luôn LingBot-Depth khi cờ bật
+- [x] **3.6 `run.py`:** `fetch_backbone` tải luôn LingBot-Depth khi cờ bật
   (bước "2/6 backbone" của pipeline), để lỗi tải xảy ra trước khi tải 30 GB episode.
-- [ ] **3.7 README:** mục Configuration thêm cờ, ví dụ, và số đo tốc độ.
+- [x] **3.7 README:** mục Configuration thêm cờ, ví dụ, và số đo tốc độ.
 
 ### Test
 
-- [ ] `expand_flags`: có cờ → đúng override; đã có `data=` → không thêm
+- [x] `expand_flags`: có cờ → đúng override; đã có `data=` → không thêm
   `data=`; cờ lạ → lỗi; không có cờ → argv giữ nguyên.
-- [ ] Compose với `--lingbot-depth`: `cfg.name` có hậu tố, `depth_encoder.name == "lingbot_depth"`.
-- [ ] `LingBotDepthEncoder` với trọng số ngẫu nhiên (không tải): shape khớp lưới
+- [x] Compose với `--lingbot-depth`: `cfg.name` có hậu tố, `depth_encoder.name == "lingbot_depth"`.
+- [x] `LingBotDepthEncoder` với trọng số ngẫu nhiên (không tải): shape khớp lưới
   của cả 3 họ backbone RGB, đóng băng hoàn toàn, chỉ Conv1×1 trong nhóm optimizer.
-- [ ] Train 4 bước trên CPU rồi resume, lưu/nạp checkpoint strict, export,
+- [x] Train 4 bước trên CPU rồi resume, lưu/nạp checkpoint strict, export,
   serve offline (`HF_HUB_OFFLINE=1`) với cờ bật.
 
 ### Hoàn thành khi
 
 `scripts/smoke_train.sh --lingbot-depth` chạy hết 6 bước trên GPU; có run
 **R3** (`--lingbot-depth`) và số đo tốc độ; quyết định mặc định theo mục 6.
+
+---
+
+## 5b. Option `--lingbot-depth-distill` (thêm theo yêu cầu)
+
+LingBot-Depth làm **thầy chỉ lúc train**; robot và server chạy như không có nó.
+
+- Học sinh: token ảnh ở **đầu ra encoder Transformer của ACT** (300 × 512),
+  qua `distill_head` (LayerNorm + Linear 512→1024), dự đoán đặc trưng của
+  LingBot-Depth cho cùng patch (đọc RGB + depth thô, lưới 15×20).
+- Loss: `loss = L1 + 10·KL + distill.weight · (1 − cos)`, `distill.weight = 0.1`.
+  Distill tác động vào encoder ACT (được train), nên có tác dụng cả khi backbone RGB đóng băng.
+- Thầy được tạo lần đầu khi train, nằm ngoài cây module: không vào checkpoint,
+  không vào optimizer, không chạy lúc suy luận hay lúc eval.
+- Học sinh có nhánh depth CNN (mặc định của cờ), hoặc chỉ RGB với
+  `data.depth_as=none` (robot không cần camera depth lúc chạy).
+- Không dùng cùng `--lingbot-depth` (LingBot-Depth đã là encoder thì distill vào chính nó không thêm gì).
+
+- [x] `distill_head`, hook lấy đầu ra encoder, `distill_loss` (`modeling_openarm_act.py`)
+- [x] `conf/distill/{none,lingbot_depth}.yaml`, cờ `--lingbot-depth-distill`, hậu tố `_distill` trong tên run
+- [x] Test: loss có mặt lúc train, gradient tới encoder ACT nhưng không tới thầy,
+  thầy không trong `state_dict`, suy luận và eval không tạo thầy; train → resume → export → serve
+- [x] Chạy thật: DINOv2-S + LingBot-Depth thật, 2 episode thật, loss distill giảm 1.03 → 0.96 sau 4 bước (CPU)
 
 ---
 
@@ -288,6 +323,7 @@ vậy cờ được **đổi thành override Hydra trước khi Hydra đọc `sy
 | R1 | gray8 | kênh thứ 4 (hiện tại) | 0 |
 | R2 | raw + mask | nhánh `DepthEncoder` | 1 + 2 |
 | R3 | raw + mask | nhánh LingBot-Depth (`--lingbot-depth`) | 3 |
+| R4 | raw + mask | nhánh CNN + thầy LingBot-Depth lúc train (`--lingbot-depth-distill`) | 5b |
 
 Giữ cố định: backbone RGB (DINOv3 ViT-B/16, hoặc `dinov2_vitb14` khi chưa có
 quyền DINOv3), `num_train_steps`, `batch_size=32`, seed, tập val. Nên chạy 2

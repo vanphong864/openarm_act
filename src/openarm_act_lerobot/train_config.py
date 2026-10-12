@@ -34,12 +34,33 @@ def depth_fields(cfg: DictConfig) -> dict:
     cameras = [str(c) for c in cfg.data.cameras]
     if depth_as == "channel" and cameras != [C.CAMERA_RGB, C.CAMERA_DEPTH]:
         raise ValueError(f"data.depth_as=channel needs cameras [chest, chest_depth], got {cameras}")
-    return {
+    if depth_as in ("branch", "none") and C.CAMERA_DEPTH not in cameras:
+        raise ValueError(f"data.depth_as={depth_as} needs chest_depth among data.cameras, got {cameras}")
+    if cfg.distill.name != "none" and C.CAMERA_DEPTH not in cameras:
+        raise ValueError(f"distill={cfg.distill.name} needs chest_depth among data.cameras (the teacher reads RGB-D)")
+    fields = {
         "depth_as": depth_as,
+        "depth_format": str(cfg.data.get("depth_format") or "gray8"),
         "rgb_key": C.LEROBOT_IMAGE_PREFIX + C.CAMERA_RGB,
         "depth_key": C.LEROBOT_IMAGE_PREFIX + C.CAMERA_DEPTH,
         "depth_init": str(cfg.data.get("depth_init") or "zero"),
+        "depth_encoder": str(cfg.depth_encoder.name),
+        "depth_encoder_channels": tuple(int(v) for v in cfg.depth_encoder.get("channels") or (32, 64, 128, 256)),
+        "distill": str(cfg.distill.name),
+        "distill_weight": float(cfg.distill.get("weight") or 0.0),
     }
+    # LingBot-Depth, as the depth encoder or the teacher.
+    lingbot = cfg.depth_encoder if cfg.depth_encoder.name == "lingbot_depth" else cfg.distill
+    if lingbot.get("repo"):
+        fields["lingbot_depth_repo"] = str(paths.resolve(lingbot.repo)) if str(lingbot.repo).startswith(("/", ".", "~")) \
+            else str(lingbot.repo)
+        fields["lingbot_depth_revision"] = lingbot.get("revision")
+    if cfg.finetune.get("lingbot_depth_config"):  # finetune=dummy: a small random one
+        from openarm_act_lerobot.configuration_openarm_act import LINGBOT_DEPTH_ENCODER
+
+        overrides = OmegaConf.to_container(cfg.finetune.lingbot_depth_config, resolve=True)
+        fields["lingbot_depth_config"] = {**LINGBOT_DEPTH_ENCODER, **overrides}
+    return fields
 
 
 def policy_overrides(cfg: DictConfig) -> dict:
@@ -142,7 +163,8 @@ def backbone_config_for(cfg: DictConfig) -> dict | None:
     family = str(cfg.backbone.family)
     if family == "resnet":
         return None
-    overrides = OmegaConf.to_container(cfg.finetune.get("backbone_config") or {}, resolve=True)
+    given = cfg.finetune.get("backbone_config")
+    overrides = OmegaConf.to_container(given, resolve=True) if given else {}
     if not cfg.finetune.load_backbone:
         return vit_config(family, overrides=overrides)
     return vit_config(family, *backbone_source(cfg), overrides)
@@ -182,6 +204,8 @@ def build_train_config(cfg: DictConfig, output_dir: Path, policy=None):
             video_backend=video_backend(),
             # The model normalises images itself (the backbone's mean/std; depth as 0..1).
             use_imagenet_stats=False,
+            # data.depth_format=raw: LeRobot's depth feature, read back in metres.
+            depth_output_unit="m",
         ),
         policy=policy if policy is not None else build_policy_config(cfg),
         output_dir=Path(output_dir),
@@ -233,6 +257,9 @@ def policy_metadata(cfg: DictConfig) -> dict:
         "cameras": [str(c) for c in cfg.data.cameras],
         "delta_actions": bool(cfg.data.delta_actions),
         "depth_as": str(cfg.data.get("depth_as") or "image"),  # channel: one RGB-D image, as act_pipeline
+        "depth_format": str(cfg.data.get("depth_format") or "gray8"),
+        "depth_encoder": str(cfg.depth_encoder.name) if cfg.get("depth_encoder") else None,
+        "distill": str(cfg.distill.name) if cfg.get("distill") else "none",
         # openarm_act refuses a camera that gives other frames than these.
         "image_size": dataset_image_size(cfg),
     }

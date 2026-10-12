@@ -14,3 +14,7 @@ backbone_config:
   num_hidden_layers: 2
   num_attention_heads: 2
   num_register_tokens: 4
+# LingBot-Depth (depth encoder or teacher), random and small: ViT-S/14, 64-d out.
+lingbot_depth_config:
+  backbone: dinov2_vits14
+  dim_out: 64

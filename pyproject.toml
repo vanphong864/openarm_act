@@ -42,4 +42,4 @@ tmp_path_retention_policy = "failed"
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["client"]
+extend-exclude = ["client", "src/openarm_act_lerobot/lingbot_depth"]

@@ -6,10 +6,14 @@
 #   scripts/run_pipeline.sh exp_name=v1
 #   scripts/run_pipeline.sh exp_name=v1 batch_size=16          # less GPU memory
 #   scripts/run_pipeline.sh exp_name=v1 resume=true
-#   scripts/run_pipeline.sh exp_name=v1 backbone=resnet18
+#   scripts/run_pipeline.sh exp_name=v1 --resnet                     # or --dinov2, --dinov3, --backbone NAME
+#   scripts/run_pipeline.sh exp_name=v1 --depth-branch               # depth through a CNN of its own
+#   scripts/run_pipeline.sh exp_name=v1 --lingbot-depth              # ... through LingBot-Depth
+#   scripts/run_pipeline.sh exp_name=v1 --lingbot-depth-distill      # LingBot-Depth as training-only teacher
 #   scripts/run_pipeline.sh exp_name=v1 backbone=dinov2_vitb14 finetune=partial
 #
-# Arguments are Hydra overrides for conf/pipeline.yaml (= train.yaml + download).
+# Arguments are Hydra overrides for conf/pipeline.yaml (= train.yaml + download),
+# and the flags of src/openarm_act_lerobot/cli.py.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -102,6 +102,22 @@ def test_smoke_builds_a_train_config(tmp_path, family):
     assert train_cfg.dataset.repo_id == "openarm/openarm_rgbd_qpos_50hz"  # the default data
 
 
+@pytest.mark.parametrize("family", ["dinov3", "dinov2"])
+def test_pretrained_vit_configs_build(tmp_path, monkeypatch, family):
+    """finetune=frozen (no backbone_config overrides) with a pretrained ViT: the
+    architecture comes from the repo's config.json, here a local copy."""
+    from openarm_act_lerobot.backbones import vit_classes
+    from openarm_act_lerobot.train_config import build_policy_config
+
+    config_class, _ = vit_classes(family)
+    config_class(hidden_size=48, num_attention_heads=2).save_pretrained(tmp_path)
+    cfg = compose_cfg(overrides=[f"backbone={FAMILIES[family]}", f"backbone.repo={tmp_path}",
+                                 "data.image_size=[480,640]", "device=cpu"])
+    policy = build_policy_config(cfg)
+    assert policy.backbone_config["hidden_size"] == 48 and policy.load_backbone_weights
+    assert policy.backbone_repo == str(tmp_path) and policy.backbone_revision is None
+
+
 def test_norm_stats_shared_across_finetuning_and_backbones():
     from openarm_act_lerobot.norm_stats import norm_stats_path
 
