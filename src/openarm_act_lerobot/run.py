@@ -9,6 +9,8 @@ train, with four things added around it:
     delta        with data.delta_actions, processors.py's steps go into the
                  processors: arm joints relative to the state in,
                  absolute targets out
+    state        with model.state_steps > 1, the dataset yields the last n
+                 joint states (LeRobot would give every camera n frames too)
     optimizer    ACT's parameter groups, the backbone at its own learning
                  rate (finetune.lr_backbone), under the Hydra optimizer and
                  schedule; LeRobot gives them only with its policy preset
@@ -89,6 +91,20 @@ def openarm_training(cfg: DictConfig, stats: dict | None):
             add_delta_steps(preprocessor, postprocessor)
         return preprocessor, postprocessor
 
+    from lerobot.datasets import factory
+
+    resolve_delta_timestamps = factory.resolve_delta_timestamps
+
+    def with_state_history(policy_cfg, ds_meta):
+        """LeRobot's delta timestamps, plus the state's history: n - 1 steps
+        back at the dataset's rate (its observation_delta_indices would ask
+        every image for them too)."""
+        timestamps = resolve_delta_timestamps(policy_cfg, ds_meta) or {}
+        steps = int(getattr(policy_cfg, "n_state_steps", 1))
+        if steps > 1:
+            timestamps["observation.state"] = [i / ds_meta.fps for i in range(1 - steps, 1)]
+        return timestamps or None
+
     def make_optimizer_and_scheduler(train_cfg, policy):
         optimizer = train_cfg.optimizer.build(policy.get_optim_params())
         scheduler = train_cfg.scheduler.build(optimizer, train_cfg.steps) if train_cfg.scheduler else None
@@ -101,6 +117,7 @@ def openarm_training(cfg: DictConfig, stats: dict | None):
     with (
         mock.patch.object(lerobot_train, "make_pre_post_processors", make_pre_post_processors),
         mock.patch.object(lerobot_train, "make_optimizer_and_scheduler", make_optimizer_and_scheduler),
+        mock.patch.object(factory, "resolve_delta_timestamps", with_state_history),
         mock.patch.object(lerobot_train, "save_checkpoint", save_with_run_config),
     ):
         yield lerobot_train.train

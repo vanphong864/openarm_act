@@ -7,6 +7,10 @@ name: act
 # 50 steps at 50 Hz is one second, as act_pipeline. Must match data.fps / the chunk you want.
 chunk_size: 50
 n_action_steps: 50              # LeRobot's select_action queue; serving returns whole chunks
+# Joint states the model reads: the current one (1), or the last n at the
+# dataset's rate, oldest first (10 at 50 Hz = 0.2 s of motion). n > 1 needs a
+# robot node that sends the history (openarm_act's state_history).
+state_steps: 1
 dim_model: 512
 n_heads: 8
 dim_feedforward: 3200

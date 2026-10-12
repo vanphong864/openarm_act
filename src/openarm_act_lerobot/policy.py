@@ -1,7 +1,8 @@
 """A trained ACT, taking OpenArm observations as openarm_act hands them over.
 
     infer({"images": {"chest": uint8 [H, W, 3], "chest_depth": uint16 [H, W] mm},
-           "state": float32 [16] qpos})
+           "state": float32 [16] qpos, or [n, 16]: the last n at the
+                    dataset's rate, oldest first, for a model with state_steps n})
         -> {"actions": float32 [chunk, 16]}  absolute targets, the dataset's
                                              joint order and units
 
@@ -59,6 +60,7 @@ class OpenArmPolicy:
         self.device = config.device
         self.cameras = [str(c) for c in self.run_cfg.data.cameras]
         self.chunk_size = int(config.chunk_size)
+        self.state_steps = int(getattr(config, "n_state_steps", 1))
         self.metadata = policy_metadata(self.run_cfg)
         self.metadata["checkpoint"] = str(self.directory)
         self.metadata["model_image_size"] = list(config.image_size)
@@ -72,9 +74,17 @@ class OpenArmPolicy:
         """The observation as LeRobot's dataset yields a frame (no batch dim)."""
         import torch
 
-        state = np.asarray(obs["state"], dtype=np.float32).reshape(-1)
-        if state.shape != (C.NUM_JOINTS,):
-            raise ValueError(f"state has {state.shape[0]} values, expected {C.NUM_JOINTS}")
+        steps = self.state_steps
+        state = np.asarray(obs["state"], dtype=np.float32)
+        if steps == 1:
+            state = state.reshape(-1)
+            if state.shape != (C.NUM_JOINTS,):
+                raise ValueError(f"state has {state.shape[0]} values, expected {C.NUM_JOINTS}")
+        elif state.shape != (steps, C.NUM_JOINTS):
+            raise ValueError(f"this model reads the last {steps} joint states, [{steps}, {C.NUM_JOINTS}] oldest "
+                             f"first; got {state.shape} (does the robot node send the history?)")
+        else:
+            state = state[None]  # the batch dimension: LeRobot only adds one to a 1-D state
         images = obs.get("images") or {}
         missing = [c for c in self.cameras if c not in images]
         if missing:

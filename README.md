@@ -182,7 +182,8 @@ Every step does only what is missing, so the same command resumes after an inter
 `resume=true` to continue the training run itself.
 
 **Several models overnight.** [scripts/train_overnight.sh](scripts/train_overnight.sh) trains
-ResNet-18, DINOv3, ResNet-18 + LingBot-Depth and DINOv3 + LingBot-Depth, then evaluates and
+ResNet-18, DINOv3, ResNet-18 + LingBot-Depth and DINOv3 + LingBot-Depth, each reading the last
+10 joint states (`STATE_STEPS=1` for the current one only), then evaluates and
 exports each, and writes `outputs/overnight/<TAG>/summary.md` (status, time, arm RMSE against
 holding still, release). It prepares every run first, so a missing DINOv3 access or a full disk
 shows within minutes; one failing model does not stop the others; the same command again
@@ -314,6 +315,7 @@ Common options:
 | `model.image_tokens` | 300 | tokens per image; the frame is resized to about this many |
 | `model.image_size` | null | `[height, width]` instead, multiples of the backbone's stride |
 | `model.kl_weight` | 10 | |
+| `model.state_steps` | 1 | the last n joint states as input (10: 0.2 s at 50 Hz); n > 1 needs openarm_act's node with `state_history` (it sends them), and the client checks |
 | `model.use_amp` | false | mixed precision |
 | `resume` | false | continue `exp_name` from its last checkpoint |
 | `device` | auto | `cuda` when available |

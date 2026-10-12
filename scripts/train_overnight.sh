@@ -11,6 +11,7 @@
 #   DINO=dinov2 scripts/train_overnight.sh              # DINOv2 ViT-B/14 (no gated access needed)
 #   LINGBOT=--lingbot-depth-distill scripts/train_overnight.sh   # LingBot-Depth as teacher instead
 #   STEPS=20000 scripts/train_overnight.sh batch_size=16         # fewer steps; extra overrides reach every run
+#   STATE_STEPS=1 scripts/train_overnight.sh            # the current joint state only (default: the last 10)
 #
 # 1. Prepares every run first (environment, backbones, episodes, datasets,
 #    norm stats): a refused DINOv3 access or a full disk shows in the first
@@ -31,6 +32,7 @@ DINO="${DINO:-dinov3}"                  # dinov3 | dinov2
 LINGBOT="${LINGBOT:---lingbot-depth}"   # --lingbot-depth | --lingbot-depth-distill
 STEPS="${STEPS:-40000}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-10000}" # 4 checkpoints a run; every one is kept
+STATE_STEPS="${STATE_STEPS:-10}"        # joint states the models read: the last 10 (0.2 s at 50 Hz)
 GPUS="${GPUS:-0}"
 RUNS=(
     "resnet|--resnet"
@@ -38,7 +40,7 @@ RUNS=(
     "resnet_lingbot|--resnet $LINGBOT"
     "dino_lingbot|--$DINO $LINGBOT"
 )
-COMMON=(exp_name="$TAG" num_train_steps="$STEPS" save_interval="$SAVE_INTERVAL" "$@")
+COMMON=(exp_name="$TAG" num_train_steps="$STEPS" save_interval="$SAVE_INTERVAL" model.state_steps="$STATE_STEPS" "$@")
 LOGS="outputs/overnight/$TAG"
 STATUS="$LOGS/status.tsv"
 mkdir -p "$LOGS"
@@ -63,7 +65,7 @@ PY
 record() { printf '%s\t%s\t%s\t%s\t%s\n' "$@" >> "$STATUS"; }  # name, status, minutes, run dir, release
 
 # ------------------------------------------------------------------ prepare
-say "overnight $TAG: ${#RUNS[@]} models, $STEPS steps each, GPUs $GPUS; logs in $LOGS"
+say "overnight $TAG: ${#RUNS[@]} models, $STEPS steps each, last $STATE_STEPS joint states, GPUs $GPUS; logs in $LOGS"
 free_gb=$(df -BG --output=avail . | tail -1 | tr -dc 0-9)
 echo "free disk: ${free_gb} GB (budget ~60 GB: datasets ~15, checkpoints ~2 GB each with LingBot-Depth)"
 if (( free_gb < 60 )); then
