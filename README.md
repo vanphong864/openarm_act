@@ -11,6 +11,13 @@ teleoperation episodes of the **OpenArm V1** bimanual arm, with a choice of visi
   [openarm_smolvla](../openarm_smolvla), [openarm_pizero](../openarm_pizero) and
   [openarm_lingbot](../openarm_lingbot), so the models compare directly.
 
+## FlowPolicy cho OpenArm
+
+Luồng train/infer mới dùng **FlowPolicy: depth → point cloud XYZ + qpos → action 16 chiều**.
+Xem [hướng dẫn FlowPolicy](docs/FLOWPOLICY.md) để convert HDF5, train, resume và chạy MuJoCo.
+Mã PointNet, U-Net và consistency loss được lấy từ repo FlowPolicy (MIT).
+Các phần ACT bên dưới là pipeline đối chứng trước đó; checkpoint ACT không dùng được cho FlowPolicy.
+
 ## Contents
 
 - [What this repository is](#what-this-repository-is)
@@ -501,3 +508,10 @@ client/                  openarm_act_lerobot_client: the robot-side policy (Pyth
 docs/                    DESIGN.md (design notes), IMPLEMENTATION_PLAN.md (depth work), REPORT_TEMPLATE.md (Vietnamese); images/
 tests/
 ```
+
+## Mô phỏng MuJoCo
+
+Workspace OpenArm hai tay và camera ngực đã được đưa vào `simulation/`.
+Xem [hướng dẫn chạy](simulation/README.md). Sau khi cài dependency mô phỏng,
+chạy `.venv/bin/python scripts/simulate.py` để mở viewer hoặc thêm `--headless`
+để xuất ảnh RGB, depth và toàn cảnh vào `outputs/simulation/`.

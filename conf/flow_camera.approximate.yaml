@@ -1,0 +1,13 @@
+# EXPERIMENT ONLY: estimated from the imported MuJoCo camera, NOT measured on the real D435i.
+# Native 1280x720, vertical FOV 42 deg; resized nonuniformly to 640x480.
+# fx = (720 / (2*tan(21 deg))) * 640/1280; fy = same focal * 480/720.
+width: 640
+height: 480
+fx: 468.91603164488436
+fy: 625.2213755265124
+cx: 319.5
+cy: 239.5
+depth_scale: 0.001
+rectified: true
+frame: camera_optical
+provenance: "APPROXIMATE: OpenArm_Sim 42deg native 1280x720 resized to 640x480; real camera uncalibrated"

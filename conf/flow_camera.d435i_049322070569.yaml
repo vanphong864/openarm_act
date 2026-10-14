@@ -1,0 +1,14 @@
+# Read directly from Intel RealSense D435I over USB on 2026-10-14.
+# Depth profile: 640x480, Z16, 90 fps. HDF5 recorder stores uint16 millimetres.
+# Use this only when the recorded depth is native depth 640x480. If the recorder
+# aligned depth to color, use color intrinsics for the aligned color grid instead.
+width: 640
+height: 480
+fx: 379.3208923339844
+fy: 379.3208923339844
+cx: 321.010986328125
+cy: 237.1314697265625
+depth_scale: 0.001
+rectified: true
+frame: camera_optical
+provenance: "Intel RealSense D435I serial 049322070569; depth 640x480 Z16; firmware 5.17.3.10; read 2026-10-14"

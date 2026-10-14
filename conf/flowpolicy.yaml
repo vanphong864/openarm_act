@@ -1,0 +1,39 @@
+# OpenArm adaptation of FlowPolicy. Compact U-Net; upstream widths are 512/1024/2048.
+seed: 42
+model:
+  horizon: 16
+  n_obs_steps: 2
+  n_action_steps: 8
+  encoder_output_dim: 64
+  down_dims: [128, 256, 512]
+  diffusion_step_embed_dim: 128
+  kernel_size: 5
+  n_groups: 8
+  condition_type: film
+  obs_as_global_cond: true
+  use_down_condition: true
+  use_mid_condition: true
+  use_up_condition: true
+  pointnet_type: mlp
+  pointcloud_encoder_cfg:
+    in_channels: 3
+    out_channels: 64
+    use_layernorm: true
+    final_norm: layernorm
+    normal_channel: false
+  Conditional_ConsistencyFM:
+    eps: 0.01
+    num_segments: 2
+    boundary: 1
+    delta: 0.01
+    alpha: 0.00001
+    num_inference_step: 1
+train:
+  steps: 40000
+  batch_size: 32
+  lr: 0.0001
+  weight_decay: 0.000001
+  warmup_steps: 500
+  save_every: 2000
+  val_batches: 20
+  num_workers: 0

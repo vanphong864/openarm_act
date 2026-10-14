@@ -1,0 +1,13 @@
+# Fill from CameraInfo for the RECTIFIED recorded depth grid.
+# If depth is aligned to color, use color intrinsics after any resizing/cropping.
+# Nulls intentionally prevent training with guessed geometry.
+width: 640
+height: 480
+fx: null
+fy: null
+cx: null
+cy: null
+depth_scale: 0.001
+rectified: true
+frame: camera_optical
+provenance: "Replace with camera serial, resolution, alignment and calibration date"
