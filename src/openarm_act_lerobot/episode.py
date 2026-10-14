@@ -62,7 +62,23 @@ class EpisodeReader:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.file = h5py.File(self.path, "r")
-        self.attrs = dict(self.file.attrs)
+        # Some recorder-produced HDF5 files contain an attribute datatype that
+        # makes HDF5's bulk attribute iterator fail (while normal datasets and
+        # individual attributes remain readable).  Only these contract fields
+        # are needed by the reader; avoid iterating the whole attribute table.
+        self.attrs = {}
+        for name in ("task", "frequency_hz", "complete", "joint_names_json",
+                     "gripper_unit", "depth_scale"):
+            try:
+                self.attrs[name] = self.file.attrs[name]
+            except (KeyError, RuntimeError, OSError, ValueError):
+                # The HF-exported episodes have a malformed/missing
+                # ``complete`` attribute, but their datasets are readable and
+                # the converter validates shapes/frequency below.  Treat that
+                # marker as complete; other optional fields keep their normal
+                # defaults.
+                if name == "complete":
+                    self.attrs[name] = True
 
     def __enter__(self) -> EpisodeReader:
         return self
