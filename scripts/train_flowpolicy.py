@@ -65,6 +65,8 @@ def main():
     ap.add_argument("--device", default="auto")
     ap.add_argument("--steps", type=int)
     ap.add_argument("--batch-size", type=int)
+    ap.add_argument("--plot-every", type=int, default=100,
+                    help="Update loss_curve.png every N training steps (0 disables live updates)")
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
     cfg = yaml.safe_load(args.config.read_text())
@@ -75,6 +77,8 @@ def main():
         tr["batch_size"] = args.batch_size
     if min(tr["steps"], tr["batch_size"], tr["save_every"], tr["val_batches"]) < 1:
         ap.error("steps, batch_size, save_every and val_batches must be positive")
+    if args.plot_every < 0:
+        ap.error("--plot-every must be non-negative")
     if args.output.exists() and not args.resume:
         raise FileExistsError("Output exists; use --resume or a new output directory")
     device = "cuda" if args.device == "auto" and torch.cuda.is_available() else ("cpu" if args.device == "auto" else args.device)
@@ -140,6 +144,11 @@ def main():
             print(f"step {step}: loss={float(loss.detach()):.8f}", flush=True)
             with (args.output / "train_loss.jsonl").open("a") as stream:
                 stream.write(json.dumps({"step": step, "train_loss": float(loss.detach())}) + "\n")
+            if args.plot_every and step % args.plot_every == 0:
+                try:
+                    plot_losses(args.output)
+                except Exception as exc:
+                    print(f"Could not update loss_curve.png: {exc}", flush=True)
         if step % tr["save_every"] == 0 or step == tr["steps"]:
             metrics = {"step": step, "train_loss": float(loss.detach()),
                        **validate(ema_model, val_loader, device, tr["val_batches"], cfg["seed"])}
