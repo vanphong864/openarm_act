@@ -114,6 +114,9 @@ def main():
         torch.set_rng_state(state["rng"])
         if device.startswith("cuda") and state.get("cuda_rng"):
             torch.cuda.set_rng_state_all(state["cuda_rng"])
+    # Checkpoint loading can leave EMA buffers on CPU. Validation receives
+    # batches on the training device, so keep the EMA copy there as well.
+    ema_model.to(device)
     loader = DataLoader(train, batch_size=tr["batch_size"], shuffle=True, num_workers=tr["num_workers"])
     val_loader = DataLoader(val, batch_size=tr["batch_size"], shuffle=False, num_workers=0)
     args.output.mkdir(parents=True, exist_ok=True)
