@@ -18,6 +18,7 @@ import yaml
 
 from openarm_flow.data import FlowDataset
 from openarm_flow.policy import build_model, save_release
+from openarm_flow.plotting import plot_losses
 from openarm_flow._vendor.model.flow.ema_model import EMAModel
 
 
@@ -137,6 +138,8 @@ def main():
         ema.step(model)
         if step == 1 or step % 100 == 0:
             print(f"step {step}: loss={float(loss.detach()):.8f}", flush=True)
+            with (args.output / "train_loss.jsonl").open("a") as stream:
+                stream.write(json.dumps({"step": step, "train_loss": float(loss.detach())}) + "\n")
         if step % tr["save_every"] == 0 or step == tr["steps"]:
             metrics = {"step": step, "train_loss": float(loss.detach()),
                        **validate(ema_model, val_loader, device, tr["val_batches"], cfg["seed"])}
@@ -150,6 +153,10 @@ def main():
                      "cuda_rng": torch.cuda.get_rng_state_all() if device.startswith("cuda") else []}
             torch.save(state, args.output / "last.pt.tmp")
             (args.output / "last.pt.tmp").replace(args.output / "last.pt")
+            try:
+                plot_losses(args.output)
+            except Exception as exc:
+                print(f"Could not update loss_curve.png: {exc}", flush=True)
     print(f"Release: {args.output / 'release'}")
 
 

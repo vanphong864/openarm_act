@@ -161,3 +161,22 @@ normalizer không dùng validation, loss/backprop cập nhật weight và roundt
 Đã convert 3 episode thực (64 frame/episode với intrinsics ước lượng), train 3 bước,
 resume đến bước 4 và chạy 20 bước vật lý MuJoCo với checkpoint smoke. Đây là kiểm
 tra end-to-end; checkpoint smoke không dùng đánh giá chất lượng gắp.
+
+## Biểu đồ loss
+
+Trainer ghi train loss mỗi 100 steps vào `train_loss.jsonl`, validation tại mốc
+checkpoint vào `metrics.jsonl`, và cập nhật `loss_curve.png` sau khi lưu checkpoint.
+Biểu đồ dùng trục loss logarithmic; train là loss batch, validation là trung bình
+các batch đánh giá với EMA nên hai đường không hoàn toàn cùng phép đo.
+Khi resume, lịch sử được giữ lại. Run cũ có thể vẽ từ `metrics.jsonl` hiện có:
+
+```bash
+.venv/bin/python scripts/plot_flow_losses.py checkpoints/flow_openarm_d435i_v1
+```
+
+Trong Colab, hiển thị ảnh sau mốc checkpoint:
+
+```python
+from IPython.display import Image, display
+display(Image('/content/checkpoints/flow_colab/loss_curve.png'))
+```
