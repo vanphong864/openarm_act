@@ -52,7 +52,7 @@ def main():
         metadata_file = args.checkpoint / "metadata.json"
         kind = json.loads(metadata_file.read_text()).get("policy_type") if metadata_file.exists() else None
     if kind != "flowpolicy":
-        ap.error("This runner requires a FlowPolicy release; dual-depth MeanFlow needs its own camera adapter")
+        ap.error("This runner requires a FlowPolicy release; use scripts/rollout_meanflow.py for MeanFlow")
     from openarm_flow.policy import OpenArmFlowPolicy
     policy = OpenArmFlowPolicy(args.checkpoint, device=args.device)
     if set(policy.cameras) - {"chest", "chest_depth"}:
