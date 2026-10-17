@@ -167,3 +167,17 @@ episode thật `105708` (validation) và `105835` (train), train 3 steps rồi r
 đọc trực tiếp hai depth view ở 4 frame thật trả `[4,16]`, hữu hạn và đúng giới hạn
 khớp. Các kết quả này kiểm tra pipeline, không chứng minh chất lượng sau train.
 Máy này không có CUDA; notebook có GPU smoke riêng trước run chính.
+
+## Nhánh RGB (tùy chọn)
+
+Depth không phân biệt được vật mỏng trên bàn và tờ giấy trắng là lỗ depth, nên có thể
+thêm hai camera RGB (`chest_rgb`, `front_rgb`).
+
+- Convert: `scripts/convert_meanflow_dataset.py --rgb` lưu thêm `data/rgb` (uint8,
+  `[N,2,3,H,W]`, cùng lưới với depth) và `rgb` trong metadata. Dung lượng ~130 KB/frame.
+- Model: `model.use_rgb: true` thêm một CNN riêng cho RGB (late fusion, không giả định
+  depth/RGB căn chỉnh pixel); augment brightness/contrast và view dropout. Dataset và
+  `use_rgb` phải khớp, train script báo lỗi nếu lệch.
+- Release/`OpenArmMeanFlowPolicy.observe` cần thêm `images[chest_rgb|front_rgb]`.
+- Đây là run mới: checkpoint depth-only không load được. Chưa có bằng chứng thực nghiệm
+  RGB cải thiện; cần so sánh validation (TCP/gripper) với run depth-only.

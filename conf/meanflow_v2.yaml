@@ -12,6 +12,7 @@ model:
   flow_ratio: 0.5
   dispersive_weight: 0.01
   depth_noise_std: 0.006
+  use_rgb: false
   pixel_dropout: 0.02
   view_dropout: 0.1
   adaptive_gamma: 0.5

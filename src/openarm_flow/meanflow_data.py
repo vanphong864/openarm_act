@@ -12,6 +12,7 @@ from openarm_data.constants import JOINT_NAMES
 from openarm_data.episode import EpisodeReader, episode_id, find_episodes
 from openarm_data.manifest import Manifest
 from openarm_flow.depth_views import DepthConfig, encode_depth, resize_depth
+from openarm_flow.rgb_views import RGBConfig, resize_rgb
 
 
 def grasp_phase_flags(actions, fps):
@@ -34,7 +35,7 @@ def grasp_phase_flags(actions, fps):
 
 def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_source="commands",
                   val_fraction=0.15, seed=42, max_episodes=None, max_frames=None,
-                  skip_invalid=False, episode_names=None):
+                  skip_invalid=False, episode_names=None, rgb: RGBConfig | None = None):
     raw, output = Path(raw), Path(output)
     if output.exists():
         raise FileExistsError(f"Output exists: {output}")
@@ -77,6 +78,13 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
                         raise ValueError(f"{camera}: expected uint16 [T,H,W]")
                     shapes[camera] = list(d.shape[1:])
                     resize_depth(d[0], cfg)
+                if rgb is not None:
+                    for camera in rgb.cameras:
+                        d = f[f"observations/images/{camera}"]
+                        if d.ndim != 4 or d.shape[0] != len(reader) or d.shape[-1] != 3 or d.dtype != np.uint8:
+                            raise ValueError(f"{camera}: expected uint8 [T,H,W,3]")
+                        shapes[camera] = list(d.shape[1:3])
+                        resize_rgb(d[0], rgb)
                 if source_shapes is not None and shapes != source_shapes:
                     raise ValueError("Source camera resolution changed between episodes")
                 labels = reader.labels(action_source, 50)
@@ -106,10 +114,16 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
                 "action_representation": "absolute_joint_position", "action_source_requested": action_source,
                 "raw_root": str(raw.resolve()), "seed": seed, "complete": False, "skipped": skipped,
                 "debug_subset": bool(max_episodes or max_frames or episode_names)}
+    if rgb is not None:
+        metadata["rgb"] = rgb.metadata()
     store.attrs.update(metadata)
     total = sum(e["count"] for e in episodes)
     depth = store.create_dataset("data/depth", shape=(total, 2, cfg.height, cfg.width),
                                  chunks=(8, 2, cfg.height, cfg.width), dtype="u2")
+    rgb_data = None
+    if rgb is not None:
+        rgb_data = store.create_dataset("data/rgb", shape=(total, 2, 3, rgb.height, rgb.width),
+                                        chunks=(8, 2, 3, rgb.height, rgb.width), dtype="u1")
     states = store.create_dataset("data/state", shape=(total, 16), chunks=(256, 16), dtype="f4")
     actions = store.create_dataset("data/action", shape=(total, 16), chunks=(256, 16), dtype="f4")
     indices = store.create_dataset("data/source_index", shape=(total,), chunks=(256,), dtype="i8")
@@ -123,6 +137,10 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
                     block = [np.stack([resize_depth(reader.file[f"observations/images/{c}"][int(i)], cfg)
                                       for c in cfg.cameras]) for i in labels.indices[first:min(first + 8, n)]]
                     depth[offset + first:offset + first + len(block)] = np.stack(block)
+                    if rgb_data is not None:
+                        rgb_data[offset + first:offset + first + len(block)] = np.stack(
+                            [np.stack([resize_rgb(reader.file[f"observations/images/{c}"][int(i)], rgb)
+                                       for c in rgb.cameras]) for i in labels.indices[first:min(first + 8, n)]])
                 states[offset:offset + n] = labels.state[:n]
                 actions[offset:offset + n] = labels.actions[:n]
                 indices[offset:offset + n] = labels.indices[:n]
@@ -138,7 +156,7 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
         print(f"{e['id']}: {n} frames, {e['split']}, action={e['action_source']}", flush=True)
     if {e["split"] for e in accepted} != {"train", "val"}:
         raise ValueError("Unreadable frames removed an entire split; rebuild with another split/seed")
-    for array in (depth, states, actions, indices):
+    for array in (depth, states, actions, indices, *([rgb_data] if rgb_data is not None else [])):
         array.resize((offset, *array.shape[1:]))
     store.create_dataset("meta/episode_ends", data=np.asarray(ends, dtype=np.int64))
     metadata.update(episodes=accepted, skipped=skipped, complete=True)
@@ -155,6 +173,7 @@ class MeanFlowDataset(torch.utils.data.Dataset):
         if split not in ("train", "val") or min(horizon, n_obs_steps) < 1:
             raise ValueError("Invalid split/horizon/history")
         self.cfg = DepthConfig(**self.metadata["depth"])
+        self.has_rgb = bool(self.metadata.get("rgb"))
         self.horizon, self.n_obs_steps, self.split = horizon, n_obs_steps, split
         ends = self.root["meta/episode_ends"][:]
         self.ranges = [(int(a), int(b)) for a, b, e in zip(np.r_[0, ends[:-1]], ends,
@@ -179,8 +198,11 @@ class MeanFlowDataset(torch.utils.data.Dataset):
         local_ids = np.minimum(ids, end - 1) - start
         approach, phase = self.phase_flags[ep]
         valid = ids < end
-        return {"obs": {"depth": torch.from_numpy(encode_depth(self.root["data/depth"].oindex[obs_ids], self.cfg)),
-                        "agent_pos": torch.from_numpy(self.root["data/state"].oindex[obs_ids])},
+        obs = {"depth": torch.from_numpy(encode_depth(self.root["data/depth"].oindex[obs_ids], self.cfg)),
+               "agent_pos": torch.from_numpy(self.root["data/state"].oindex[obs_ids])}
+        if self.has_rgb:
+            obs["rgb"] = torch.from_numpy(self.root["data/rgb"].oindex[obs_ids])  # uint8 [T,2,3,H,W]
+        return {"obs": obs,
                 "action": torch.from_numpy(actions), "action_valid": torch.from_numpy(valid),
                 "action_approach": torch.from_numpy(approach[local_ids] & valid[:, None]),
                 "action_phase": torch.from_numpy(phase[local_ids] & valid[:, None])}

@@ -18,28 +18,44 @@ from openarm_flow._vendor.model.flow.positional_embedding import SinusoidalPosEm
 
 class DualDepthEncoder(nn.Module):
     """Shared small CNN; ordered per-view features retain camera identity and layout."""
-    def __init__(self, feature_dim=96, state_dim=64):
+    def __init__(self, feature_dim=96, state_dim=64, use_rgb=False):
         super().__init__()
-        layers = []
-        channels = 4  # metric-depth encoding, mask, image u and v (not XYZ)
-        for width in (16, 32, 64):
-            layers += [nn.Conv2d(channels, width, 3, stride=2, padding=1),
-                       nn.GroupNorm(8, width), nn.SiLU()]
-            channels = width
-        self.cnn = nn.Sequential(*layers, nn.AdaptiveAvgPool2d((3, 4)), nn.Flatten(),
-                                 nn.Linear(64 * 3 * 4, feature_dim), nn.LayerNorm(feature_dim), nn.SiLU())
-        self.state = nn.Sequential(nn.Linear(16, state_dim), nn.SiLU(), nn.Linear(state_dim, state_dim))
-        self.output_dim = 2 * feature_dim + state_dim
 
-    def forward(self, depth, state):
+        def tower(channels):
+            layers = []
+            for width in (16, 32, 64):
+                layers += [nn.Conv2d(channels, width, 3, stride=2, padding=1),
+                           nn.GroupNorm(8, width), nn.SiLU()]
+                channels = width
+            return nn.Sequential(*layers, nn.AdaptiveAvgPool2d((3, 4)), nn.Flatten(),
+                                 nn.Linear(64 * 3 * 4, feature_dim), nn.LayerNorm(feature_dim), nn.SiLU())
+
+        self.cnn = tower(4)  # metric-depth encoding, mask, image u and v (not XYZ)
+        self.rgb_cnn = tower(5) if use_rgb else None  # normalized RGB + image u and v
+        self.state = nn.Sequential(nn.Linear(16, state_dim), nn.SiLU(), nn.Linear(state_dim, state_dim))
+        self.output_dim = 2 * feature_dim * (2 if use_rgb else 1) + state_dim
+
+    @staticmethod
+    def _coords(like, n):
+        h, w = like.shape[-2:]
+        yy, xx = torch.meshgrid(torch.linspace(-1, 1, h, device=like.device, dtype=like.dtype),
+                                torch.linspace(-1, 1, w, device=like.device, dtype=like.dtype), indexing="ij")
+        return torch.stack([xx, yy])[None].expand(n, -1, -1, -1)
+
+    def forward(self, depth, state, rgb=None):
         b, t, v, c, h, w = depth.shape
         if v != 2 or c != 2 or state.shape != (b, t, 16):
             raise ValueError("Expected depth [B,T,2,2,H,W] and state [B,T,16]")
-        yy, xx = torch.meshgrid(torch.linspace(-1, 1, h, device=depth.device, dtype=depth.dtype),
-                                torch.linspace(-1, 1, w, device=depth.device, dtype=depth.dtype), indexing="ij")
-        coords = torch.stack([xx, yy])[None].expand(b * t * v, -1, -1, -1)
-        views = self.cnn(torch.cat([depth.reshape(b * t * v, c, h, w), coords], dim=1))
-        return torch.cat([views.reshape(b, t, -1), self.state(state)], dim=-1).flatten(1)
+        if (rgb is None) != (self.rgb_cnn is None):
+            raise ValueError("RGB input must be given exactly when the encoder uses RGB")
+        n = b * t * v
+        features = [self.cnn(torch.cat([depth.reshape(n, c, h, w), self._coords(depth, n)], dim=1)).reshape(b, t, -1)]
+        if rgb is not None:
+            if rgb.shape[:3] != (b, t, 2) or rgb.shape[3] != 3:
+                raise ValueError("Expected rgb [B,T,2,3,H,W]")
+            image = rgb.reshape(n, 3, *rgb.shape[-2:])
+            features.append(self.rgb_cnn(torch.cat([image, self._coords(image, n)], dim=1)).reshape(b, t, -1))
+        return torch.cat([*features, self.state(state)], dim=-1).flatten(1)
 
 
 class MeanVelocityUNet(nn.Module):
@@ -114,7 +130,8 @@ class MeanFlowPolicy(nn.Module):
                  pixel_dropout=0.02, view_dropout=0.1, adaptive_gamma=0.5,
                  separate_gripper=False, action_loss_weight=0.0, tcp_position_weight=0.0,
                  tcp_orientation_weight=0.0, gripper_loss_weight=1.0, phase_weight=1.0,
-                 tcp_position_scale_m=0.03, tcp_orientation_scale_rad=0.25):
+                 tcp_position_scale_m=0.03, tcp_orientation_scale_rad=0.25, use_rgb=False,
+                 rgb_color_jitter=0.2):
         super().__init__()
         if (not down_dims or any(d < 8 or d % 8 for d in down_dims)
                 or min(horizon, n_obs_steps, n_action_steps) < 1
@@ -124,7 +141,7 @@ class MeanFlowPolicy(nn.Module):
             raise ValueError("Invalid feature/time dimensions")
         if not all(0 <= x <= 1 for x in (flow_ratio, pixel_dropout, view_dropout, adaptive_gamma)):
             raise ValueError("Ratios and adaptive_gamma must be in [0,1]")
-        if min(dispersive_weight, depth_noise_std) < 0:
+        if min(dispersive_weight, depth_noise_std, rgb_color_jitter) < 0:
             raise ValueError("Loss/noise weights cannot be negative")
         if min(action_loss_weight, tcp_position_weight, tcp_orientation_weight, gripper_loss_weight) < 0:
             raise ValueError("Auxiliary loss weights cannot be negative")
@@ -135,6 +152,7 @@ class MeanFlowPolicy(nn.Module):
         self.dispersive_weight, self.adaptive_gamma = dispersive_weight, adaptive_gamma
         self.depth_noise_std, self.pixel_dropout, self.view_dropout = depth_noise_std, pixel_dropout, view_dropout
         self.separate_gripper = separate_gripper
+        self.use_rgb, self.rgb_color_jitter = use_rgb, rgb_color_jitter
         self.action_loss_weight, self.tcp_position_weight = action_loss_weight, tcp_position_weight
         self.tcp_orientation_weight, self.gripper_loss_weight = tcp_orientation_weight, gripper_loss_weight
         self.phase_weight = phase_weight
@@ -142,7 +160,7 @@ class MeanFlowPolicy(nn.Module):
         self.register_buffer("arm_indices", torch.tensor([i for i in range(16) if i not in (7, 15)]), persistent=False)
         self.register_buffer("gripper_indices", torch.tensor([7, 15]), persistent=False)
         self.flow_dim = 14 if separate_gripper else 16
-        self.encoder = DualDepthEncoder(feature_dim, state_dim)
+        self.encoder = DualDepthEncoder(feature_dim, state_dim, use_rgb)
         condition_dim = self.encoder.output_dim * n_obs_steps
         self.velocity = MeanVelocityUNet(condition_dim, down_dims, time_dim, self.flow_dim)
         self.gripper_head = None
@@ -219,7 +237,28 @@ class MeanFlowPolicy(nn.Module):
             drop = torch.rand(len(depth), device=depth.device) < self.view_dropout
             camera = torch.randint(2, (len(depth),), device=depth.device)
             depth[torch.arange(len(depth), device=depth.device)[drop], :, camera[drop]] = 0
-        return self.encoder(depth, (state - self.state_mean) / self.state_scale)
+        rgb = self._prepare_rgb(obs, augment) if self.use_rgb else None
+        return self.encoder(depth, (state - self.state_mean) / self.state_scale, rgb)
+
+    def _prepare_rgb(self, obs, augment):
+        if "rgb" not in obs:
+            raise ValueError("Model uses RGB but the observation has no 'rgb' [B,T,2,3,H,W]")
+        rgb = obs["rgb"].float() / 255 if obs["rgb"].dtype == torch.uint8 else obs["rgb"].float()
+        if augment:
+            b, device = len(rgb), rgb.device
+            # Per-sample, per-camera brightness/contrast jitter, constant over the history.
+            jitter = self.rgb_color_jitter
+            brightness = 1 + jitter * (2 * torch.rand(b, 1, 2, 1, 1, 1, device=device) - 1)
+            contrast = 1 + jitter * (2 * torch.rand(b, 1, 2, 1, 1, 1, device=device) - 1)
+            mean = rgb.mean((-3, -2, -1), keepdim=True)
+            rgb = ((rgb - mean) * contrast + mean) * brightness
+            rgb = rgb.clamp(0, 1)
+        rgb = (rgb - .5) / .25
+        if augment and self.view_dropout:
+            drop = torch.rand(len(rgb), device=rgb.device) < self.view_dropout
+            camera = torch.randint(2, (len(rgb),), device=rgb.device)
+            rgb[torch.arange(len(rgb), device=rgb.device)[drop], :, camera[drop]] = 0
+        return rgb
 
     def compute_loss(self, batch):
         if not self.stats_ready:

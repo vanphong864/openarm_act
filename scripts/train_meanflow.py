@@ -124,6 +124,9 @@ def main():
     val = MeanFlowDataset(args.dataset, mc["horizon"], mc["n_obs_steps"], "val")
     if not len(train) or not len(val):
         raise ValueError("Both train and validation episodes are required")
+    if bool(mc.get("use_rgb")) != train.has_rgb:
+        raise ValueError(f"model.use_rgb={mc.get('use_rgb', False)} but dataset has_rgb={train.has_rgb}; "
+                         "convert with --rgb (or set use_rgb accordingly)")
     model = MeanFlowPolicy(**mc)
     start, best, state = 0, math.inf, None
     if args.resume:
