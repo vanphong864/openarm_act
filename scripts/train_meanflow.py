@@ -115,8 +115,8 @@ def main():
         ap.error("Steps, batch size and validation/checkpoint intervals must be positive")
     if tr["num_workers"] < 0 or tr["warmup_steps"] < 0 or min(tr["lr"], tr["max_grad_norm"]) <= 0:
         ap.error("Invalid optimizer/dataloader settings")
-    if args.output.exists() and not args.resume:
-        raise FileExistsError("Output exists; choose a new run or --resume")
+    if args.output.exists() and any(args.output.iterdir()) and not args.resume:
+        raise FileExistsError("Output exists and is not empty; choose a new run or --resume")
     device = "cuda" if args.device == "auto" and torch.cuda.is_available() else ("cpu" if args.device == "auto" else args.device)
     torch.set_num_threads(4)
     torch.manual_seed(cfg["seed"])
