@@ -1,12 +1,12 @@
 import numpy as np
 import pytest
 
-from openarm_act_lerobot import constants as C
-from openarm_act_lerobot.episode import EpisodeReader
-from openarm_act_lerobot.episode import command_lag
-from openarm_act_lerobot.episode import episode_id
-from openarm_act_lerobot.episode import find_episodes
-from openarm_act_lerobot.manifest import Manifest
+from openarm_data import constants as C
+from openarm_data.episode import EpisodeReader
+from openarm_data.episode import command_lag
+from openarm_data.episode import episode_id
+from openarm_data.episode import find_episodes
+from openarm_data.manifest import Manifest
 
 
 def test_find_skips_partial(episode_factory, tmp_path):

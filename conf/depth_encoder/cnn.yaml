@@ -1,5 +1,0 @@
-# data.depth_as=branch: a small CNN reads [depth, valid] beside the RGB
-# backbone, trained from scratch (lr.peak_lr); its output starts at zero.
-name: cnn
-suffix: ""                      # added to the run name
-channels: [32, 64, 128, 256]

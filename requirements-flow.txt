@@ -1,5 +1,2 @@
-# Install into the existing project environment; no old mujoco-py/MetaWorld needed.
-zarr>=2.18,<3
-einops>=0.8
-termcolor>=2
-matplotlib>=3.8
+# Install the current project and its MeanFlow/FlowPolicy dependencies.
+-e .

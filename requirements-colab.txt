@@ -1,0 +1,10 @@
+# Keep Colab's existing CUDA-enabled torch. No ACT/LeRobot/MuJoCo needed.
+numpy>=1.26,<3
+h5py>=3.16
+zarr>=2.18,<3
+einops>=0.8
+termcolor>=2
+PyYAML>=6
+matplotlib>=3.8
+omegaconf>=2.3
+pytest>=8

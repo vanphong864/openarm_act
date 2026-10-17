@@ -1,0 +1,257 @@
+{
+ "_episode_20261013_105835": {
+  "frames_used": 87,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 4065,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.04674153645833334
+   },
+   "front": {
+    "pixels_never_seen": 10458,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.069228515625
+   }
+  }
+ },
+ "_episode_20261013_105956": {
+  "frames_used": 83,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 5825,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.045572916666666664
+   },
+   "front": {
+    "pixels_never_seen": 9505,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.07287109375
+   }
+  }
+ },
+ "_episode_20261013_110059": {
+  "frames_used": 83,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 2918,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.03898763020833333
+   },
+   "front": {
+    "pixels_never_seen": 10057,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.07760091145833334
+   }
+  }
+ },
+ "_episode_20261013_110534": {
+  "frames_used": 73,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 3747,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.04808919270833333
+   },
+   "front": {
+    "pixels_never_seen": 9659,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.07386393229166667
+   }
+  }
+ },
+ "_episode_20261013_112615": {
+  "frames_used": 80,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 14531,
+    "median_samples": 9.0,
+    "depth_invalid_fraction": 0.078427734375
+   },
+   "front": {
+    "pixels_never_seen": 7874,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.06528971354166667
+   }
+  }
+ },
+ "_episode_20261013_112753": {
+  "frames_used": 95,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 5689,
+    "median_samples": 12.0,
+    "depth_invalid_fraction": 0.04864583333333333
+   },
+   "front": {
+    "pixels_never_seen": 8948,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.06367513020833333
+   }
+  }
+ },
+ "_episode_20261013_115412": {
+  "frames_used": 63,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 194578,
+    "median_samples": 0.0,
+    "depth_invalid_fraction": 0.6602473958333334
+   },
+   "front": {
+    "pixels_never_seen": 8713,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.06950846354166666
+   }
+  }
+ },
+ "_episode_20261013_115624": {
+  "frames_used": 79,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 543,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.026871744791666666
+   },
+   "front": {
+    "pixels_never_seen": 8403,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.05880859375
+   }
+  }
+ },
+ "_episode_20261013_120206": {
+  "frames_used": 70,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 182073,
+    "median_samples": 0.0,
+    "depth_invalid_fraction": 0.627255859375
+   },
+   "front": {
+    "pixels_never_seen": 10666,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.072138671875
+   }
+  }
+ },
+ "_episode_20261013_121058": {
+  "frames_used": 66,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 2174,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.04053059895833333
+   },
+   "front": {
+    "pixels_never_seen": 8609,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.063623046875
+   }
+  }
+ },
+ "_episode_20261013_121145": {
+  "frames_used": 57,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 9528,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.07540364583333334
+   },
+   "front": {
+    "pixels_never_seen": 9673,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.0643359375
+   }
+  }
+ },
+ "_episode_20261013_121230": {
+  "frames_used": 75,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 2558,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.07883463541666667
+   },
+   "front": {
+    "pixels_never_seen": 12252,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.0740625
+   }
+  }
+ },
+ "_episode_20261013_121452": {
+  "frames_used": 66,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 1436,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.03578776041666667
+   },
+   "front": {
+    "pixels_never_seen": 10807,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.07000325520833334
+   }
+  }
+ },
+ "_episode_20261013_121544": {
+  "frames_used": 66,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 3146,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.05032552083333333
+   },
+   "front": {
+    "pixels_never_seen": 14199,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.07749348958333334
+   }
+  }
+ },
+ "_episode_20261013_121715": {
+  "frames_used": 57,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 5067,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.05544270833333333
+   },
+   "front": {
+    "pixels_never_seen": 13395,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.07363932291666667
+   }
+  }
+ },
+ "_episode_20261013_135312": {
+  "frames_used": 80,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 3950,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.05169270833333333
+   },
+   "front": {
+    "pixels_never_seen": 6302,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.056966145833333336
+   }
+  }
+ },
+ "_episode_20261013_135842": {
+  "frames_used": 85,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 1077,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.035182291666666664
+   },
+   "front": {
+    "pixels_never_seen": 12277,
+    "median_samples": 15.0,
+    "depth_invalid_fraction": 0.08700846354166666
+   }
+  }
+ }
+}

@@ -1,8 +1,8 @@
 # Task, exclusions and the held-out split, per episode. See
-# src/openarm_act_lerobot/manifest.py. Episode ids are paths under paths.raw without
+# src/openarm_data/manifest.py. Episode ids are paths under paths.raw without
 # .hdf5, e.g. 2026-10-08/episode_20261008_104216.
 defaults:
-  task: null                    # optional for ACT (data.fallback_task otherwise)
+  task: null                    # optional task metadata
 rules:
   # Inferred from the camera frames (2026-10-09); confirm or reword.
   - match: "data_openarm_8_10/*"

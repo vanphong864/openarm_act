@@ -1,0 +1,35 @@
+# Two-depth MeanFlow v2. New training run; v1/FlowPolicy weights are incompatible.
+seed: 42
+model:
+  horizon: 16
+  n_obs_steps: 4
+  n_action_steps: 4
+  down_dims: [64, 128, 256]
+  time_dim: 64
+  feature_dim: 96
+  state_dim: 64
+  delta_actions: true
+  flow_ratio: 0.5
+  dispersive_weight: 0.01
+  depth_noise_std: 0.006
+  pixel_dropout: 0.02
+  view_dropout: 0.1
+  adaptive_gamma: 0.5
+  separate_gripper: true
+  action_loss_weight: 0.5
+  tcp_position_weight: 0.1
+  tcp_orientation_weight: 0.02
+  gripper_loss_weight: 1.0
+  phase_weight: 3.0
+  tcp_position_scale_m: 0.03
+  tcp_orientation_scale_rad: 0.25
+train:
+  steps: 20000
+  batch_size: 16
+  lr: 0.0001
+  weight_decay: 0.0001
+  warmup_steps: 500
+  save_every: 500
+  val_samples_per_episode: 64
+  num_workers: 0
+  max_grad_norm: 1.0

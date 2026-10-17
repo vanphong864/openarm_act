@@ -4,10 +4,11 @@
 /checkpoints/
 /releases/
 /outputs/
+/simulation/outputs/
 /policy_records/
 /wandb/
 
-# Secrets: keys go in .env (template: .env.example).
+# Local secrets retained for existing setups.
 .env
 
 # Personal notes.
@@ -25,3 +26,8 @@ __pycache__/
 .idea/
 *.swp
 *~
+
+# Local artifacts
+MUJOCO_LOG.TXT
+*.tar.gz
+*.crdownload

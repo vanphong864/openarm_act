@@ -1,0 +1,54 @@
+# Config cho policy OpenArm, mô phỏng giống dữ liệu thật nhất có thể. Kế thừa scene.yaml, chỉ ghi các khoá khác.
+#
+# Số đo hình học (kích thước, chiều cao, camera) GIỮ NGUYÊN theo scene.yaml; riêng vị trí ngang của hộp và ô dời cho
+# khớp ảnh thật (xem dưới). Ngoài ra thêm những gì số đo tay không có, lấy từ dữ liệu thật (2026-10-08/, 56 episode):
+#   - động lực học servo (scripts/identify_dynamics.py);
+#   - màu vật liệu và phông nền ảnh thật (camera thật ngả xanh: hộp "đen" thành xám xanh);
+#   - vùng sinh vật theo vị trí hộp kẹo thật ở khung đầu (chiếu ngược ảnh bằng camera của scene.yaml);
+#   - xử lý ảnh như camera thật (openarm_sim/sensor.py: khung 16:9 nén ngang thành 4:3, nhiễu depth D435).
+#
+# Sai lệch sim–thực tế được CHẤP NHẬN (không chỉnh số đo để bù): phát lại lệnh thật của 37 episode tay phải trong sim
+# (scripts/replay_real.py) chỉ thành công một phần. Thử nghiệm cho thấy nếu hộp cao hơn ~2 cm so với robot thì phát lại
+# thành công 84% (xem outputs/final_check/, README): tức ngón kẹp thật xuống thấp hơn mô hình ~2 cm so với mặt hộp
+# (sai số lắp đặt/đo hoặc khác biệt robot–mô hình). Coi đó là sai lệch có thể xảy ra ngoài thực tế.
+#
+# Tay phải không với tới tâm ô: người điều khiển thật thả vật ở mép gần-phải của ô, với khớp 2 sát giới hạn (lề trung vị
+# 1.7% tầm quay khi kẹp); IK ở đây cho phép lề nhỏ (task.ik_margin) và policy đặt ở điểm gần tâm ô nhất với tới được.
+base: scene.yaml
+
+# Vị trí ngang của hộp và ô DỜI CHO KHỚP ẢNH THẬT (chiếu ngược điểm mốc ảnh bằng camera của scene.yaml,
+# scripts/fit_camera.py): mép trái hộp y ≈ +0.33, mép phải ≈ −0.27 → tâm y ≈ +0.03; tâm ô ≈ (0.365, 0.018).
+# Chiều cao, kích thước và camera giữ đúng số đo.
+# Màu (rgba) chỉnh để ảnh render khớp màu trung bình ảnh thật; ánh sáng sim lên mặt ngang ≈ 1.08.
+box:
+  center_y: 0.03
+  rgba: [0.25, 0.34, 0.37, 1]
+target_pad:
+  offset_xy: [-0.005, -0.012]   # tâm ô (0.365, 0.018) so với tâm mặt hộp (0.37, 0.03)
+  rgba: [0.785, 0.825, 0.83, 1]
+objects:
+  mentos_tin:
+    rgba: [0.065, 0.50, 0.40, 1]
+task:
+  # tư thế đầu mỗi episode = tư thế ở khung đầu của dữ liệu thật (trung vị 56 episode, lệch < 0.02 rad):
+  # hai tay buông thẳng xuống cạnh cột, kẹp mở. [trái j1–j7, kẹp | phải j1–j7, kẹp]
+  home_qpos: [0.018, 0.007, 0.017, 0.016, 0.018, -0.002, 0.003, 0.043,
+              -0.014, 0.0, -0.02, 0.011, 0.007, -0.01, 0.005, 0.043]
+  ik_margin: 0.005
+  # vị trí ban đầu hộp kẹo ở các episode tay phải: x 0.318 ± 0.026, y −0.154 ± 0.038
+  spawn_x: [0.27, 0.38]
+  spawn_y: [-0.22, -0.08]
+
+# Servo khớp hiệu chỉnh theo robot thật (scripts/identify_dynamics.py, outputs/sysid/dynamics.json): phát lại
+# joint_commands thật vào sim, sai số qpos 0.026 → 0.012 rad (so với 0.10 rad nếu đứng yên) trên episode không dùng
+# khi tìm. Robot thật mềm hơn nhiều so với giá trị đặt ban đầu và KHÔNG bù trọng lực (effort ≈ mô-men trọng lực),
+# nên chịu độ võng ở khớp 1, 4. Lệnh thật dẫn trước phản hồi ~1 bước (lag_steps).
+control:
+  arm_kp: [42.5, 42.5, 25.5, 25.5, 24.0, 24.0, 24.0]
+  arm_kv: [2.04, 2.04, 1.02, 1.02, 0.1, 0.1, 0.1]
+  gravity_compensation: false
+
+# Phông nền ảnh thật cho camera ngực (scripts/make_background.py); thiếu file thì cảnh như cũ.
+background:
+  image: data/background_chest.png
+  distance: 2.0

@@ -1,22 +1,13 @@
 """Fake episodes in the exact layout openarm_mc's recorder writes."""
 
-import atexit
 import json
-import os
-import shutil
-import tempfile
 from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
 
-# LeRobot reads HF_LEROBOT_HOME once, at import: point it somewhere disposable
-# before any test imports it.
-os.environ["HF_LEROBOT_HOME"] = tempfile.mkdtemp(prefix="openarm_act_lerobot_")
-atexit.register(shutil.rmtree, os.environ["HF_LEROBOT_HOME"], ignore_errors=True)
-
-from openarm_act_lerobot import constants as C  # noqa: E402
+from openarm_data import constants as C
 
 
 def write_episode(

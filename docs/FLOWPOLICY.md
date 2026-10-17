@@ -41,14 +41,14 @@ camera giữa thu data và infer sẽ làm thay đổi phân phối.
 
 ## Cài đặt
 
-Từ thư mục gốc repo, trong môi trường đã dùng train ACT:
+Từ thư mục gốc repo, cài dependency model/dataset:
 
 ```bash
-uv pip install --python .venv/bin/python -r requirements-flow.txt
+uv pip install --python .venv/bin/python -e .
 ```
 
-Các script FlowPolicy dùng trực tiếp `.venv/bin/python`. Nếu chạy `uv sync` về sau,
-cài lại `requirements-flow.txt` vì các dependency tùy chọn này không nằm trong lock ACT.
+Các script FlowPolicy dùng trực tiếp `.venv/bin/python`. Dependency nằm trong
+`pyproject.toml`.
 MuJoCo dùng thêm `simulation/requirements.txt` nếu chưa cài.
 
 ## Convert toàn bộ dữ liệu đã tải
@@ -74,7 +74,7 @@ không phải đưa toàn bộ point cloud vào RAM.
 `commands` dùng logic labels sẵn của repo: joint_commands khi có, các cột không được
 command (ví dụ gripper) dùng next_qpos; nếu thiếu nhiều thì cả episode dùng next_qpos.
 Dataset ghi source thực tế và ghi chú cho từng episode. `--action-source qpos` có sẵn
-để đối chứng với bản ACT cũ, nhưng đó là trạng thái đo ở cùng thời điểm.
+để đối chứng, nhưng đó là trạng thái đo ở cùng thời điểm.
 
 Tùy chọn:
 
@@ -118,7 +118,7 @@ checkpoints/flow_openarm_v1/
 ```
 
 Release là checkpoint cuối, chưa tự chọn best hoặc lưu mọi mốc.
-Tải toàn bộ `release/` về máy để infer. Weight ACT đã train không chuyển trực tiếp sang FlowPolicy.
+Tải toàn bộ `release/` về máy để infer.
 
 ## Infer trong MuJoCo
 
@@ -151,8 +151,7 @@ actions = policy.infer()["actions"]  # [8,16] targets tuyệt đối
 ```
 
 Với XYZRGB, thêm `chest: rgb_uint8` vào images. API này và runner đã hỗ trợ
-FlowPolicy; websocket/ROS client ACT cũ chưa được đổi sang giao thức history ảnh
-của FlowPolicy, không dùng `scripts/serve.py` cho release này.
+FlowPolicy. Repo chưa cung cấp websocket/ROS server cho release này.
 
 ## Kiểm chứng đã thực hiện
 

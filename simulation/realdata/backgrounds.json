@@ -1,0 +1,17 @@
+{
+ "all": {
+  "frames_used": 254,
+  "cameras": {
+   "chest": {
+    "pixels_never_seen": 994,
+    "median_samples": 25.0,
+    "depth_invalid_fraction": 0.042353515625
+   },
+   "front": {
+    "pixels_never_seen": 5672,
+    "median_samples": 25.0,
+    "depth_invalid_fraction": 0.05181966145833333
+   }
+  }
+ }
+}

@@ -8,9 +8,9 @@ import numpy as np
 import torch
 import zarr
 
-from openarm_act_lerobot.constants import H5_DEPTH, H5_RGB, JOINT_NAMES
-from openarm_act_lerobot.episode import EpisodeReader, episode_id, find_episodes
-from openarm_act_lerobot.manifest import Manifest
+from openarm_data.constants import H5_DEPTH, H5_RGB, JOINT_NAMES
+from openarm_data.episode import EpisodeReader, episode_id, find_episodes
+from openarm_data.manifest import Manifest
 from openarm_flow.pointcloud import geometry_metadata, project_depth
 
 

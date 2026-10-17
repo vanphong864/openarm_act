@@ -1,0 +1,139 @@
+# SINH TỰ ĐỘNG bởi build_measured_scene.py — đừng sửa tay
+kind: measured
+robot:
+  model: third_party/openarm_mujoco/v1/openarm_bimanual.xml
+  base_body: openarm_body_link0
+measurements:
+  cameras: /home/space/VR/openarm_act/simulation/realdata/cameras_20261013.json
+  actuators: /home/space/VR/openarm_act/simulation/realdata/actuators_20261013.json
+  scene: /home/space/VR/openarm_act/simulation/realdata/scene_20261013.json
+  joint_offsets: /home/space/VR/openarm_act/simulation/realdata/joint_offsets_20261013.json
+background_dir: ../realdata
+table:
+  x_range:
+  - -0.3
+  - 1.1
+  y_range:
+  - -0.8
+  - 0.8
+  rgba:
+  - 0.62
+  - 0.52
+  - 0.4
+  - 1
+  fallback_support_z: 0.0
+box:
+  center_xy:
+  - 0.35
+  - 0.005
+  size_x: 0.41
+  size_y: 0.81
+  yaw_deg: 0.0
+  rgba:
+  - 0.2
+  - 0.23
+  - 0.25
+  - 1
+  friction:
+  - 0.8
+  - 0.01
+  - 0.001
+target_pad:
+  center:
+  - 0.33182792365550995
+  - 0.02127721905708313
+  - 0.15405321553165366
+  size:
+  - 0.16411055624485016
+  - 0.11442043259739876
+  yaw_deg: -86.09526443481445
+  rgba:
+  - 0.93
+  - 0.93
+  - 0.92
+  - 1
+objects:
+  mentos_tin:
+    size:
+    - 0.088
+    - 0.044
+    - 0.016
+    mass: 0.045
+    friction:
+    - 0.6
+    - 0.005
+    - 0.0001
+    rgba:
+    - 0.065
+    - 0.5
+    - 0.3
+    - 1
+    pos_xy:
+    - 0.2811
+    - 0.2165
+    yaw_deg: -18.2642
+camera_housings:
+  chest:
+    size:
+    - 0.09
+    - 0.025
+    - 0.025
+task:
+  fps: 50
+  object: mentos_tin
+  arm: left
+  spawn_by_arm:
+    left:
+      x:
+      - 0.2361
+      - 0.3335
+      y:
+      - 0.1365
+      - 0.2777
+      yaw_deg:
+      - -55.4
+      - 50.6
+      median:
+      - 0.2811
+      - 0.2165
+      - -18.2642
+      n: 46
+    right:
+      x:
+      - 0.225
+      - 0.3565
+      y:
+      - -0.2743
+      - -0.1153
+      yaw_deg:
+      - -87.0
+      - 70.6
+      median:
+      - 0.2944
+      - -0.1918
+      - 28.8736
+      n: 42
+  home_qpos:
+  - 0.01850000023841858
+  - -0.00019999999494757503
+  - 0.016599999740719795
+  - 0.012799999676644802
+  - -0.013500000350177288
+  - 0.006099999882280827
+  - 0.003599999938160181
+  - 0.0430000014603138
+  - -0.002899999963119626
+  - 0.0024999999441206455
+  - -0.013199999928474426
+  - -0.013199999928474426
+  - 0.0031999999191612005
+  - 0.002099999925121665
+  - -0.004399999976158142
+  - 0.0430000014603138
+  place_by_arm:
+    left:
+    - 0.3439
+    - 0.0402
+    right:
+    - 0.333
+    - 0.0035

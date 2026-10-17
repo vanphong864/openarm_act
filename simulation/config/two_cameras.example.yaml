@@ -1,0 +1,19 @@
+# Ví dụ camera D435 thứ hai. Thay pose, FOV và tên luồng theo thiết bị/dữ liệu thật.
+# Pose bên dưới chỉ để kiểm tra pipeline render, không phải hiệu chuẩn.
+base: scene_openarm.yaml
+
+additional_cameras:
+  - name: side
+    parent_body: world      # hoặc tên body MuJoCo nếu camera gắn trên robot
+    pos: [0.05, 0.50, 0.55] # [x, y, z] m trong hệ parent_body; x trước, y trái, z lên
+    yaw_deg: -57.0          # góc nhìn quanh z; âm = quay sang phải
+    pitch_deg: 33.0         # dương = chúc xuống
+    roll_deg: 0.0
+    color:
+      name: side_color
+      fovy_deg: 42.0
+      resolution: [1280, 720]
+    depth:
+      name: side_depth
+      fovy_deg: 58.0
+      resolution: [848, 480]

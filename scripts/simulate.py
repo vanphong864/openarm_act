@@ -31,8 +31,8 @@ def main():
     ap.add_argument("--headless", action="store_true", help="Save camera and overview images instead of opening a window")
     ap.add_argument("--seconds", type=float, default=2.0, help="Headless simulation duration")
     ap.add_argument("--out", type=Path, default=root / "outputs/simulation")
-    ap.add_argument("--config", type=Path, default=root / "simulation/config/scene_act.yaml")
-    ap.add_argument("--scene", type=Path, default=root / "simulation/scenes/openarm_act.xml")
+    ap.add_argument("--config", type=Path, default=root / "simulation/config/scene_openarm.yaml")
+    ap.add_argument("--scene", type=Path, default=root / "simulation/scenes/openarm.xml")
     args = ap.parse_args()
     if args.seconds < 0:
         ap.error("--seconds must be nonnegative")

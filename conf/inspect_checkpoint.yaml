@@ -1,9 +1,0 @@
-# How much the first layer of a checkpoint's backbone weighs each input channel:
-#   uv run scripts/inspect_checkpoint.py checkpoint=checkpoints/act_dinov3_vitb16_frozen/r1_rgbd
-checkpoint: ???                 # a release, a step, or a run directory (its newest step)
-
-hydra:
-  job:
-    chdir: false
-  run:
-    dir: outputs/${hydra:job.name}/${now:%Y-%m-%d_%H-%M-%S}

@@ -1,0 +1,53 @@
+# Cảnh MuJoCo cho dataset 2026-10-13 (hai camera chest + front, 46 episode tay trái, 42 tay phải).
+# Số liệu hình học/camera/bộ chấp hành ĐO TRÊN DỮ LIỆU — xem simulation/realdata/*.json và docs/SIM_20261013.md.
+# File này chỉ ghi những gì dữ liệu không đo được (khối lượng/ma sát vật, màu, phạm vi bàn gỗ ngoài khung hình).
+# Sinh XML: simulation/scripts/build_measured_scene.py --config simulation/config/scene_20261013.yaml
+kind: measured
+robot:
+  model: third_party/openarm_mujoco/v1/openarm_bimanual.xml
+  base_body: openarm_body_link0
+
+measurements:
+  cameras: ../realdata/cameras_20261013.json
+  actuators: ../realdata/actuators_20261013.json
+  scene: ../realdata/scene_20261013.json
+  joint_offsets: ../realdata/joint_offsets_20261013.json   # q_mô_hình = q_encoder + Δ
+
+background_dir: ../realdata          # ảnh nền thật cho camera ghép nền (make_real_backgrounds.py)
+
+table:                               # bàn gỗ đỡ hộp kê; chỉ phần dưới tầm với có ý nghĩa vật lý
+  x_range: [-0.30, 1.10]
+  y_range: [-0.80, 0.80]
+  rgba: [0.62, 0.52, 0.40, 1]
+  fallback_support_z: 0.0
+
+box:                                 # null = lấy theo vùng mặt hộp nhìn thấy (scene_*.json: surface)
+  # Mép gần x ≈ 0.145: mép trên mặt hộp trong ảnh front, dải y không có robot (điểm x≈0 cùng độ cao là bàn tay/cột).
+  # Mép xa x ≈ 0.555: mặt đứng phía trước hộp hiện ở đáy ảnh front. y: vùng nhìn thấy của hai camera.
+  # Hộp + ô giấy xê dịch giữa các phiên (±1.5 cm): replay dịch hộp theo ô giấy của từng episode.
+  center_xy: [0.350, 0.005]
+  size_x: 0.410
+  size_y: 0.810
+  yaw_deg: 0.0
+  rgba: [0.20, 0.23, 0.25, 1]
+  friction: [0.8, 0.01, 0.001]
+
+target_pad: {}                       # điền bởi build_measured_scene.py từ scene_*.json (tâm, kích thước, yaw)
+
+objects:
+  mentos_tin:                        # khối lượng/ma sát KHÔNG đo được từ dữ liệu
+    # dài × rộng × dày (m). Dày 16 mm: depth mặt trên − mặt hộp (hai camera, 281 lần đo). Rộng 44 mm: khe ngón
+    # trong model ở độ mở kẹp lúc giữ (22.8 mm tay trái / 24.5 mm tay phải) — encoder kẹp đo đúng chiều bị bóp.
+    # Dài 88 mm: dài theo depth (~100 mm) trừ cùng độ phồng mép depth như chiều rộng (~8 mm mỗi phía). ±5 mm.
+    size: [0.088, 0.044, 0.016]
+    mass: 0.045                      # ước lượng (hộp kẹo Mentos thiếc đầy); effort tay không đủ nhạy để đo
+    friction: [0.6, 0.005, 0.0001]
+    rgba: [0.065, 0.50, 0.30, 1]
+
+camera_housings:                     # vỏ D435 có va chạm (tay có thể chạm camera ngực)
+  chest: {size: [0.090, 0.025, 0.025]}
+
+task:
+  fps: 50
+  object: mentos_tin
+  # arm, spawn và home_qpos được build_measured_scene.py điền theo phân bố đo được của từng tay

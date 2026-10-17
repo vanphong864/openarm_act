@@ -1,0 +1,94 @@
+# Mọi số đo của cảnh (đơn vị: m, độ). Bản đầu — chỉnh lại theo đo thật rồi chạy lại build_scene.py.
+# Quy ước: x trước, y trái, z lên. z = 0 là mặt bàn đặt chân đế robot; gốc toạ độ = gốc chân đế.
+
+robot:
+  model: third_party/openarm_mujoco/v1/openarm_bimanual.xml
+  base_body: openarm_body_link0
+  # Dải z để đo "mặt trước cột" từ mesh chân đế (cắt lát ngang, lấy x lớn nhất mỗi lát).
+  # Lưu ý: từ z ≈ 0.613 trở lên là khối vai (body_link0_5) nhô ra tới x ≈ 0.065,
+  # nên dải mặc định dừng ở 0.60 để chỉ lấy thân cột. check_scene.py in profile 0.30–0.70 để đối chiếu.
+  column_probe_z: [0.30, 0.60]
+  column_probe_steps: 13
+
+table:                      # mặt bàn đặt robot, mặt trên ở z = 0
+  x_range: [-0.40, 1.00]
+  y_range: [-0.80, 0.80]
+  thickness: 0.04
+  floor_z: -0.75            # sàn nhà (chỉ để hình ảnh)
+  rgba: [0.55, 0.45, 0.35, 1]
+
+box:                        # hộp kê trước robot = "mặt bàn" gắp
+  top_height: 0.16          # mặt trên so với mặt bàn (số quan trọng nhất)
+  gap_from_column: 0.14     # mép gần robot cách mặt trước cột theo x
+  size_x: 0.40              # chiều sâu theo x
+  size_y: 0.60              # chiều rộng theo y
+  center_y: 0.0
+  rgba: [0.04, 0.04, 0.04, 1]   # đen
+
+target_pad:                 # ô trắng trên mặt hộp = đích đặt vật
+  size: [0.12, 0.12]        # x, y
+  thickness: 0.0005         # mỏng như giấy/băng dính; có va chạm
+  offset_xy: [0.0, 0.0]     # so với tâm mặt hộp
+  rgba: [0.95, 0.95, 0.95, 1]
+
+objects:
+  mentos_tin:               # hộp kẹo Mentos sắt màu xanh lá
+    # ƯỚC LƯỢNG — chưa có số đo chính thức; đo hộp thật bằng thước rồi sửa.
+    size: [0.060, 0.040, 0.018]   # dài x rộng x cao
+    mass: 0.045
+    rgba: [0.10, 0.55, 0.20, 1]
+    pos_xy: [0.27, -0.15]   # phía tay phải: vừa lọt khung camera ngực (mép dưới ảnh ~x 0.25) vừa trong tầm với
+    yaw_deg: 0.0
+    friction: [0.6, 0.005, 0.0001]  # kim loại sơn trên mặt hộp
+
+# Điều khiển: thay actuator gốc của openarm_mujoco (motor mô-men) bằng servo vị trí PD cho mọi khớp tay và ngón,
+# giống chế độ MIT (kp, kd) của motor Damiao. ctrl = góc khớp mong muốn (rad) / độ mở ngón (m); thân robot được
+# bù trọng lực nên tay giữ yên tư thế. Bỏ mục này để dùng lại actuator gốc.
+control:
+  integrator: implicitfast
+  arm_kp: [250, 250, 150, 150, 40, 40, 40]
+  arm_kv: [12, 12, 6, 6, 1.0, 1.0, 1.0]
+  gripper_kp: 300
+  gripper_kv: 5
+  gravity_compensation: true
+
+# Bài toán gắp-đặt một tay: dùng cho replay demo, reward, môi trường RL (openarm_sim/task.py, runner.py).
+task:
+  arm: right
+  object: mentos_tin       # tên trong `objects`
+  fps: 50                  # tần số điều khiển / ghi dữ liệu (như ALOHA)
+  # Tư thế bắt đầu mỗi episode: TCP kẹp hướng xuống tại điểm này (y lấy dấu theo tay: trái +, phải −).
+  # Ở q = 0 tay duỗi thẳng xuống thấp hơn mặt hộp nên không dùng làm điểm xuất phát.
+  home_tcp: [0.12, 0.20, 0.34]
+  # vùng khởi tạo ngẫu nhiên của vật (toạ độ thế giới x, y; m) cho demo giả và RL
+  spawn_x: [0.22, 0.30]
+  spawn_y: [-0.22, -0.10]
+
+camera:                     # Intel RealSense D435i ở ngực (gắn vào base_body)
+  lens_center_height: 0.58  # z của quang tâm (mặt phẳng zero-depth) so với mặt bàn
+  offset_x_from_column: 0.03  # khoảng x từ mặt trước cột tới quang tâm
+  housing_center_y: 0.0     # y của tâm vỏ camera (vỏ căn giữa theo y)
+  pitch_deg: 45.0           # chúc xuống (dương = nhìn xuống)
+  yaw_deg: 0.0              # dương = quay sang trái
+  roll_deg: 0.0
+  color:
+    name: chest_color
+    fovy_deg: 42.0
+    resolution: [1280, 720]
+  depth:
+    name: chest_depth
+    fovy_deg: 58.0
+    resolution: [848, 480]
+  # Hình học D435 theo realsense2_description/urdf/_d435.urdf.xacro (khung camera_link:
+  # gốc = quang tâm depth = infra1, x trước, y trái, z lên).
+  realsense:
+    depth_y_from_housing_center: 0.0175   # d435_cam_depth_py
+    color_y_from_depth: 0.015             # d435_cam_depth_to_color_offset
+    glass_front_from_optical: 0.0043      # d435_zero_depth_to_glass + d435_glass_to_front
+    housing_size: [0.02505, 0.090, 0.025] # sâu x rộng x cao
+  mesh: third_party/openarm_mujoco/v0.3/meshes/d435.stl
+  collision: true           # hộp va chạm quanh vỏ (để phát hiện tay đụng camera)
+  mount_bracket: true       # tấm đỡ hình học đơn giản nối cột với lưng camera (chỉ hiển thị)
+
+render:
+  overview_size: [960, 720]
