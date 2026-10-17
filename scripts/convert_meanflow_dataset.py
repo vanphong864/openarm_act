@@ -19,7 +19,7 @@ def main():
     ap.add_argument("--cameras", nargs=2, default=["chest_depth", "front_depth"])
     ap.add_argument("--height", type=int, default=120)
     ap.add_argument("--width", type=int, default=160)
-    ap.add_argument("--rgb", action="store_true", help="Also store both RGB views (data/rgb, uint8)")
+    ap.add_argument("--no-rgb", action="store_true", help="Depth only: skip storing the RGB views (data/rgb)")
     ap.add_argument("--rgb-cameras", nargs=2, default=["chest_rgb", "front_rgb"])
     ap.add_argument("--depth-scale", type=float, default=0.001)
     ap.add_argument("--action-source", choices=["commands", "next_qpos", "qpos"], default="commands")
@@ -31,7 +31,7 @@ def main():
     ap.add_argument("--episodes", nargs="+", help="Explicit episode filenames for a smoke test")
     args = ap.parse_args()
     cfg = DepthConfig(cameras=tuple(args.cameras), height=args.height, width=args.width, depth_scale=args.depth_scale)
-    rgb = RGBConfig(cameras=tuple(args.rgb_cameras), height=args.height, width=args.width) if args.rgb else None
+    rgb = None if args.no_rgb else RGBConfig(cameras=tuple(args.rgb_cameras), height=args.height, width=args.width)
     metadata = convert_depth(args.raw, args.output, cfg, manifest=args.manifest, action_source=args.action_source,
                              val_fraction=args.val_fraction, seed=args.seed, max_episodes=args.max_episodes,
                              max_frames=args.max_frames, skip_invalid=args.skip_invalid, episode_names=args.episodes, rgb=rgb)
