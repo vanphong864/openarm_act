@@ -13,6 +13,11 @@ model:
   dispersive_weight: 0.01
   depth_noise_std: 0.006
   use_rgb: true
+  spatial_softmax: true         # keypoint encoder (the old 3x4 average pool blurs positions to several cm)
+  keypoints: 32
+  rgb_color_jitter: 0.2
+  rgb_channel_gain_jitter: 0.1   # white-balance variation (lighting changes during the day)
+  state_noise_std: 0.01          # rad, encoder input only
   pixel_dropout: 0.02
   view_dropout: 0.1
   adaptive_gamma: 0.5
@@ -25,10 +30,10 @@ model:
   tcp_position_scale_m: 0.03
   tcp_orientation_scale_rad: 0.25
 train:
-  steps: 20000
+  steps: 10000      # validation peaked near 6000 in the first run; best_release keeps the best
   batch_size: 16
   lr: 0.0001
-  weight_decay: 0.0001
+  weight_decay: 0.01
   warmup_steps: 500
   save_every: 500
   val_samples_per_episode: 64

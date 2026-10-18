@@ -16,12 +16,42 @@ from openarm_flow._vendor.model.flow.conv1d_components import Downsample1d, Upsa
 from openarm_flow._vendor.model.flow.positional_embedding import SinusoidalPosEmb
 
 
+class SpatialSoftmaxHead(nn.Module):
+    """Learned keypoints: per-channel soft-argmax over the feature map, in [-1,1] image coordinates.
+
+    Keeps sub-cell position information that a coarse average pool throws away; the global average
+    of the same map is concatenated so appearance/context is not lost.
+    """
+    def __init__(self, channels, keypoints, feature_dim):
+        super().__init__()
+        self.keypoints = nn.Conv2d(channels, keypoints, 1)
+        self.log_temperature = nn.Parameter(torch.zeros(()))
+        self.out = nn.Sequential(nn.Linear(2 * keypoints + channels, feature_dim), nn.LayerNorm(feature_dim), nn.SiLU())
+
+    def forward(self, x):
+        n, _, h, w = x.shape
+        logits = self.keypoints(x).flatten(2) * self.log_temperature.exp()
+        weights = logits.softmax(-1).view(n, -1, h, w)
+        ys = torch.linspace(-1, 1, h, device=x.device, dtype=x.dtype)
+        xs = torch.linspace(-1, 1, w, device=x.device, dtype=x.dtype)
+        px = (weights.sum(2) * xs).sum(-1)
+        py = (weights.sum(3) * ys).sum(-1)
+        return self.out(torch.cat([px, py, x.mean((2, 3))], dim=-1))
+
+
 class DualDepthEncoder(nn.Module):
     """Shared small CNN; ordered per-view features retain camera identity and layout."""
-    def __init__(self, feature_dim=96, state_dim=64, use_rgb=False):
+    def __init__(self, feature_dim=96, state_dim=64, use_rgb=False, spatial_softmax=False, keypoints=32):
         super().__init__()
 
         def tower(channels):
+            if spatial_softmax:  # stride 4 total: 30x40 map for 120x160 input, then keypoints
+                layers = []
+                for width, stride in ((16, 2), (32, 2), (64, 1)):
+                    layers += [nn.Conv2d(channels, width, 3, stride=stride, padding=1),
+                               nn.GroupNorm(8, width), nn.SiLU()]
+                    channels = width
+                return nn.Sequential(*layers, SpatialSoftmaxHead(64, keypoints, feature_dim))
             layers = []
             for width in (16, 32, 64):
                 layers += [nn.Conv2d(channels, width, 3, stride=2, padding=1),
@@ -131,7 +161,8 @@ class MeanFlowPolicy(nn.Module):
                  separate_gripper=False, action_loss_weight=0.0, tcp_position_weight=0.0,
                  tcp_orientation_weight=0.0, gripper_loss_weight=1.0, phase_weight=1.0,
                  tcp_position_scale_m=0.03, tcp_orientation_scale_rad=0.25, use_rgb=False,
-                 rgb_color_jitter=0.2):
+                 rgb_color_jitter=0.2, spatial_softmax=False, keypoints=32, rgb_channel_gain_jitter=0.0,
+                 state_noise_std=0.0):
         super().__init__()
         if (not down_dims or any(d < 8 or d % 8 for d in down_dims)
                 or min(horizon, n_obs_steps, n_action_steps) < 1
@@ -141,7 +172,7 @@ class MeanFlowPolicy(nn.Module):
             raise ValueError("Invalid feature/time dimensions")
         if not all(0 <= x <= 1 for x in (flow_ratio, pixel_dropout, view_dropout, adaptive_gamma)):
             raise ValueError("Ratios and adaptive_gamma must be in [0,1]")
-        if min(dispersive_weight, depth_noise_std, rgb_color_jitter) < 0:
+        if min(dispersive_weight, depth_noise_std, rgb_color_jitter, rgb_channel_gain_jitter, state_noise_std) < 0 or keypoints < 1:
             raise ValueError("Loss/noise weights cannot be negative")
         if min(action_loss_weight, tcp_position_weight, tcp_orientation_weight, gripper_loss_weight) < 0:
             raise ValueError("Auxiliary loss weights cannot be negative")
@@ -153,6 +184,7 @@ class MeanFlowPolicy(nn.Module):
         self.depth_noise_std, self.pixel_dropout, self.view_dropout = depth_noise_std, pixel_dropout, view_dropout
         self.separate_gripper = separate_gripper
         self.use_rgb, self.rgb_color_jitter = use_rgb, rgb_color_jitter
+        self.rgb_channel_gain_jitter, self.state_noise_std = rgb_channel_gain_jitter, state_noise_std
         self.action_loss_weight, self.tcp_position_weight = action_loss_weight, tcp_position_weight
         self.tcp_orientation_weight, self.gripper_loss_weight = tcp_orientation_weight, gripper_loss_weight
         self.phase_weight = phase_weight
@@ -160,7 +192,7 @@ class MeanFlowPolicy(nn.Module):
         self.register_buffer("arm_indices", torch.tensor([i for i in range(16) if i not in (7, 15)]), persistent=False)
         self.register_buffer("gripper_indices", torch.tensor([7, 15]), persistent=False)
         self.flow_dim = 14 if separate_gripper else 16
-        self.encoder = DualDepthEncoder(feature_dim, state_dim, use_rgb)
+        self.encoder = DualDepthEncoder(feature_dim, state_dim, use_rgb, spatial_softmax, keypoints)
         condition_dim = self.encoder.output_dim * n_obs_steps
         self.velocity = MeanVelocityUNet(condition_dim, down_dims, time_dim, self.flow_dim)
         self.gripper_head = None
@@ -238,6 +270,11 @@ class MeanFlowPolicy(nn.Module):
             camera = torch.randint(2, (len(depth),), device=depth.device)
             depth[torch.arange(len(depth), device=depth.device)[drop], :, camera[drop]] = 0
         rgb = self._prepare_rgb(obs, augment) if self.use_rgb else None
+        if augment and self.state_noise_std:
+            # Encoder input only (targets unchanged): robustness to the small state errors of closed-loop rollouts.
+            noise = self.state_noise_std * torch.randn_like(state)
+            noise[..., self.gripper_indices] *= 0.1
+            state = state + noise
         return self.encoder(depth, (state - self.state_mean) / self.state_scale, rgb)
 
     def _prepare_rgb(self, obs, augment):
@@ -252,6 +289,9 @@ class MeanFlowPolicy(nn.Module):
             contrast = 1 + jitter * (2 * torch.rand(b, 1, 2, 1, 1, 1, device=device) - 1)
             mean = rgb.mean((-3, -2, -1), keepdim=True)
             rgb = ((rgb - mean) * contrast + mean) * brightness
+            if self.rgb_channel_gain_jitter:  # white-balance shift, per sample and camera
+                gain = 1 + self.rgb_channel_gain_jitter * (2 * torch.rand(b, 1, 2, 3, 1, 1, device=device) - 1)
+                rgb = rgb * gain
             rgb = rgb.clamp(0, 1)
         rgb = (rgb - .5) / .25
         if augment and self.view_dropout:

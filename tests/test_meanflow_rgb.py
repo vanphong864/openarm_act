@@ -97,3 +97,39 @@ def test_depth_only_model_rejects_rgb_mismatch(rgb_converted):
     model = MeanFlowPolicy(**model_config())  # use_rgb=False ignores the extra key
     model.set_statistics(MeanFlowDataset(path, 4, 2).statistics())
     assert torch.isfinite(model.compute_loss(batch)[0])
+
+
+def test_spatial_softmax_localizes_and_trains(rgb_converted, tmp_path):
+    from openarm_flow.meanflow import SpatialSoftmaxHead
+    head = SpatialSoftmaxHead(4, 3, 8)
+    with torch.no_grad():
+        head.keypoints.weight.zero_()
+        head.keypoints.weight[:, 0] = 20.0  # every keypoint follows channel 0
+        head.log_temperature.fill_(0.0)
+    x = torch.zeros(2, 4, 12, 16)
+    x[0, 0, 3, 4] = 1.0
+    x[1, 0, 9, 13] = 1.0
+    weights = head.keypoints(x).flatten(2).softmax(-1).view(2, 3, 12, 16)
+    ys, xs = torch.linspace(-1, 1, 12), torch.linspace(-1, 1, 16)
+    px = (weights.sum(2) * xs).sum(-1)[:, 0]
+    py = (weights.sum(3) * ys).sum(-1)[:, 0]
+    assert px[0] < -0.3 and px[1] > 0.5 and py[0] < -0.3 and py[1] > 0.5
+
+    path, metadata, _ = rgb_converted
+    data = MeanFlowDataset(path, 4, 2)
+    config = {**model_config(), "use_rgb": True, "spatial_softmax": True, "keypoints": 8,
+              "rgb_channel_gain_jitter": .1, "state_noise_std": .01}
+    model = MeanFlowPolicy(**config)
+    model.set_statistics(data.statistics())
+    batch = next(iter(torch.utils.data.DataLoader(data, batch_size=2)))
+    loss, _ = model.compute_loss(batch)
+    loss.backward()
+    assert torch.isfinite(loss) and model.encoder.rgb_cnn[-1].keypoints.weight.grad.norm() > 0
+    model.eval()
+    first = model.encode(batch["obs"])
+    torch.testing.assert_close(first, model.encode(batch["obs"]))  # augmentation is train-only
+    save_meanflow_release(tmp_path / "release", model, config, metadata, 1)
+    loaded = OpenArmMeanFlowPolicy(tmp_path / "release", "cpu")
+    noise = torch.randn(2, 4, 16)
+    torch.testing.assert_close(loaded.policy.predict_action(batch["obs"], noise=noise)["action"],
+                               model.predict_action(batch["obs"], noise=noise)["action"])
