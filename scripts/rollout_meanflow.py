@@ -115,6 +115,9 @@ def main():
         for name, camera in cameras.items():
             per_background = background_dir / "bg_episodes" / f"background_{name}_{episode}_rgb.png"
             camera.set_background(f"_{episode}", per_background.parent) if per_background.exists() else camera.set_background("")
+        with h5py.File(args.raw / f"{episode}.hdf5", "r") as f:
+            gains = {name: camera.match_color(f[f"observations/images/{name}_rgb"][0]).round(3).tolist()
+                     for name, camera in cameras.items()}
         sim.reset(qpos16=q0)
         set_object(m, sim.d, obj, starts[episode]["xy"], starts[episode]["yaw_deg"], box_top + half_h + 1e-4)
         mujoco.mj_forward(m, sim.d)
@@ -160,6 +163,7 @@ def main():
         row = {"episode": episode, "recorded_arm": recorded_arm, "steps": len(states),
                "lifted": max_lift > 0.03, "max_lift_m": max_lift, "in_pad": in_pad,
                "tin_end_xy": final[:2].round(4).tolist(),
+               "background_color_gain": gains,
                "min_active_gripper_mm": float(states[:, grip].min() * 1000),
                "active_arm_joint_range_rad": float(np.ptp(states[:, active], axis=0).max()),
                "inactive_arm_moved_rad": float(np.ptp(states[:, 8:15] if recorded_arm == "left" else states[:, :7], axis=0).max()),

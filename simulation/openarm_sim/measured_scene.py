@@ -116,6 +116,15 @@ def build_measured_spec(cfg: dict) -> mujoco.MjSpec:
                     mass=o["mass"], rgba=o["rgba"], contype=1, conaffinity=1, condim=4,
                     friction=o.get("friction", [0.6, 0.005, 0.0001]), group=DYNAMIC_GROUP)
         ob.add_site(name=f"{name}_center", size=[0.003, 0, 0], rgba=[1, 1, 0, 1], group=4)
+        if o.get("top_texture"):
+            # Nhãn mặt trên lấy từ ảnh thật (scripts/make_tin_texture.py): lớp mỏng chỉ để hiển thị.
+            spec.add_texture(name=f"{name}_top_tex", type=mujoco.mjtTexture.mjTEXTURE_2D,
+                             file=str(_abs(o["top_texture"])))
+            mat = spec.add_material(name=f"{name}_top_mat")
+            mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = f"{name}_top_tex"
+            ob.add_geom(name=f"{name}_label", type=mujoco.mjtGeom.mjGEOM_BOX, size=[sx / 2, sy / 2, 1e-4],
+                        pos=[0, 0, sz / 2 + 1e-4], material=f"{name}_top_mat", rgba=[1, 1, 1, 1],
+                        contype=0, conaffinity=0, density=0, group=DYNAMIC_GROUP)
 
     # ---- camera đã hiệu chuẩn (+ vỏ D435 va chạm cho camera ngực, nằm sau quang tâm)
     for cam_name, c in cams.items():

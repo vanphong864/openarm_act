@@ -42,6 +42,23 @@ class CompositeCamera:
             if holes.any():
                 self.bg_rgb = cv2.inpaint(self.bg_rgb, holes, 5, cv2.INPAINT_TELEA)
 
+    def match_color(self, reference_rgb: np.ndarray) -> np.ndarray:
+        """Khớp histogram từng kênh của nền với ảnh thật tham chiếu (vd khung đầu episode): camera thật tự cân bằng
+        trắng/phơi sáng theo thời gian, còn nền là trung vị cả episode. Ánh xạ theo phân vị nên vùng bão hoà (giấy
+        trắng) vẫn trắng. Trả về hệ số trung vị mỗi kênh (để ghi log)."""
+        ref = np.asarray(reference_rgb).reshape(-1, 3)
+        bg = self.bg_rgb.reshape(-1, 3)
+        quantiles = np.linspace(0, 1, 257)
+        out = np.empty_like(bg)
+        for ch in range(3):
+            src_q = np.quantile(bg[:, ch], quantiles)
+            ref_q = np.quantile(ref[:, ch], quantiles)
+            lut = np.interp(np.arange(256), src_q + np.arange(257) * 1e-6, ref_q)  # src_q phải tăng chặt
+            out[:, ch] = np.clip(np.rint(lut[bg[:, ch]]), 0, 255)
+        gain = np.median(ref, 0) / np.maximum(np.median(bg, 0), 1.0)
+        self.bg_rgb = out.reshape(self.bg_rgb.shape)
+        return gain
+
     def _init_render(self, m, rng, noise, noise_mm_at_0p6, edge_jump_m):
         self.r = OffscreenRenderer(m, self.W, self.H)
         self.opt = mujoco.MjvOption()
