@@ -35,6 +35,12 @@ class CompositeCamera:
         self.bg_depth = cv2.imread(str(bg / f"background_{self.name}{tag}_depth.png"), cv2.IMREAD_UNCHANGED)
         if self.bg_rgb.shape[:2] != (self.H, self.W) or self.bg_depth.shape != (self.H, self.W):
             raise ValueError(f"Ảnh nền {self.name}{tag} không đúng kích thước {(self.W, self.H)}")
+        # Pixel luôn bị robot thật che (0 mẫu) bị để đen; lấp RGB từ lân cận. Depth giữ 0 như cảm biến mất điểm.
+        samples = bg / f"background_{self.name}{tag}_samples.png"
+        if samples.exists():
+            holes = (cv2.imread(str(samples), cv2.IMREAD_UNCHANGED) == 0).astype(np.uint8)
+            if holes.any():
+                self.bg_rgb = cv2.inpaint(self.bg_rgb, holes, 5, cv2.INPAINT_TELEA)
 
     def _init_render(self, m, rng, noise, noise_mm_at_0p6, edge_jump_m):
         self.r = OffscreenRenderer(m, self.W, self.H)

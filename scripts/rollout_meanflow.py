@@ -34,11 +34,17 @@ def main():
     ap.add_argument("--device", default="auto")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--no-gif", action="store_true")
+    ap.add_argument("--view", action="store_true", help="Open the interactive MuJoCo viewer (real-time pacing)")
     ap.add_argument("--out", type=Path, default=root / "outputs/sim_meanflow")
     args = ap.parse_args()
     if args.seconds is not None and args.seconds < 0.02:
         ap.error("--seconds must be positive")
 
+    if args.view:
+        os.environ["MUJOCO_GL"] = "glfw"
+        sys.path.insert(0, str(root / "scripts"))
+        from simulate import clean_snap_gui_environment
+        clean_snap_gui_environment()
     sys.path.insert(0, str(root / "src"))
     sys.path.insert(0, str(root / "simulation"))
     sys.path.insert(0, str(root / "simulation/scripts"))
@@ -84,7 +90,13 @@ def main():
     execute_steps = min(args.execute_steps or policy.chunk_size, policy.chunk_size)
     args.out.mkdir(parents=True, exist_ok=True)
     rows = []
+    viewer = None
+    if args.view:
+        import mujoco.viewer
+        viewer = mujoco.viewer.launch_passive(m, sim.d)
     for episode in episodes:
+        if viewer is not None and not viewer.is_running():
+            break
         if episode not in starts:
             print(f"{episode}: no measured start pose for the tin; skipped", flush=True)
             continue
@@ -113,6 +125,9 @@ def main():
         states, actions, objects, frames = [], [], [], []
         max_lift, chunk, started = 0.0, None, time.monotonic()
         for step in range(total):
+            tick = time.monotonic()
+            if viewer is not None and not viewer.is_running():
+                break
             images = {}
             for name, camera in cameras.items():
                 rgb, depth = camera.observe(sim.d)
@@ -131,13 +146,18 @@ def main():
             position = sim.d.xpos[obj_body].copy()
             objects.append(position)
             max_lift = max(max_lift, float(position[2] - (box_top + half_h)))
+            if viewer is not None:
+                viewer.sync()
+                time.sleep(max(0, 1 / sim.fps - (time.monotonic() - tick)))
+        if not states:  # viewer closed before the first step
+            break
         final = sim.d.xpos[obj_body].copy()
         local = (final - pad_center) @ pad_rot
         in_pad = bool(abs(local[0]) <= pad_half[0] and abs(local[1]) <= pad_half[1] and final[2] < box_top + 0.05)
         states, actions = np.asarray(states), np.asarray(actions)
         active = slice(0, 7) if recorded_arm == "left" else slice(8, 15)
         grip = 7 if recorded_arm == "left" else 15
-        row = {"episode": episode, "recorded_arm": recorded_arm, "steps": total,
+        row = {"episode": episode, "recorded_arm": recorded_arm, "steps": len(states),
                "lifted": max_lift > 0.03, "max_lift_m": max_lift, "in_pad": in_pad,
                "tin_end_xy": final[:2].round(4).tolist(),
                "min_active_gripper_mm": float(states[:, grip].min() * 1000),
@@ -152,6 +172,8 @@ def main():
                            duration=round(5000 / sim.fps), loop=0)
     for camera in cameras.values():
         camera.close()
+    if viewer is not None:
+        viewer.close()
     if not rows:
         raise SystemExit("No episode was rolled out")
     summary = {"checkpoint": str(args.checkpoint), "step": policy.metadata.get("step"), "use_rgb": policy.policy.use_rgb,
