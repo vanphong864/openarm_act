@@ -18,6 +18,9 @@ model:
   rgb_color_jitter: 0.2
   rgb_channel_gain_jitter: 0.1   # white-balance variation (lighting changes during the day)
   state_noise_std: 0.01          # rad, encoder input only
+  state_history_dropout: 0.5     # hide joint-motion history half the time: close timing must come from images
+  rgb_backbone: resnet18         # ImageNet stem..layer2 + keypoints ("cnn" = small CNN from scratch)
+  pretrained_backbone: true
   pixel_dropout: 0.02
   view_dropout: 0.1
   adaptive_gamma: 0.5
@@ -25,12 +28,12 @@ model:
   action_loss_weight: 0.5
   tcp_position_weight: 0.1
   tcp_orientation_weight: 0.02
-  gripper_loss_weight: 1.0
+  gripper_loss_weight: 2.0
   phase_weight: 3.0
   tcp_position_scale_m: 0.03
   tcp_orientation_scale_rad: 0.25
 train:
-  steps: 10000      # validation peaked near 6000 in the first run; best_release keeps the best
+  steps: 20000      # run2: best validation at 13500 of 20000; best_release keeps the best
   batch_size: 16
   lr: 0.0001
   weight_decay: 0.01

@@ -77,14 +77,14 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
                     if d.ndim != 3 or d.shape[0] != len(reader) or d.dtype != np.uint16:
                         raise ValueError(f"{camera}: expected uint16 [T,H,W]")
                     shapes[camera] = list(d.shape[1:])
-                    resize_depth(d[0], cfg)
+                    resize_depth(d[0], cfg, camera)
                 if rgb is not None:
                     for camera in rgb.cameras:
                         d = f[f"observations/images/{camera}"]
                         if d.ndim != 4 or d.shape[0] != len(reader) or d.shape[-1] != 3 or d.dtype != np.uint8:
                             raise ValueError(f"{camera}: expected uint8 [T,H,W,3]")
                         shapes[camera] = list(d.shape[1:3])
-                        resize_rgb(d[0], rgb)
+                        resize_rgb(d[0], rgb, camera)
                 if source_shapes is not None and shapes != source_shapes:
                     raise ValueError("Source camera resolution changed between episodes")
                 labels = reader.labels(action_source, 50)
@@ -134,12 +134,12 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
                 labels = reader.labels(action_source, 50)
                 n = e["count"]
                 for first in range(0, n, 8):
-                    block = [np.stack([resize_depth(reader.file[f"observations/images/{c}"][int(i)], cfg)
+                    block = [np.stack([resize_depth(reader.file[f"observations/images/{c}"][int(i)], cfg, c)
                                       for c in cfg.cameras]) for i in labels.indices[first:min(first + 8, n)]]
                     depth[offset + first:offset + first + len(block)] = np.stack(block)
                     if rgb_data is not None:
                         rgb_data[offset + first:offset + first + len(block)] = np.stack(
-                            [np.stack([resize_rgb(reader.file[f"observations/images/{c}"][int(i)], rgb)
+                            [np.stack([resize_rgb(reader.file[f"observations/images/{c}"][int(i)], rgb, c)
                                        for c in rgb.cameras]) for i in labels.indices[first:min(first + 8, n)]])
                 states[offset:offset + n] = labels.state[:n]
                 actions[offset:offset + n] = labels.actions[:n]

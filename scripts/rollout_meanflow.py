@@ -35,6 +35,9 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--no-gif", action="store_true")
     ap.add_argument("--view", action="store_true", help="Open the interactive MuJoCo viewer (real-time pacing)")
+    ap.add_argument("--handover-before-close", type=float, metavar="SECONDS",
+                    help="Diagnosis: replay the recorded joint_commands until SECONDS before the recorded gripper "
+                         "close, then hand over to the policy (isolates the final grasp from approach drift)")
     ap.add_argument("--out", type=Path, default=root / "outputs/sim_meanflow")
     args = ap.parse_args()
     if args.seconds is not None and args.seconds < 0.02:
@@ -104,6 +107,18 @@ def main():
             q0 = f["observations/qpos"][0].astype(np.float64)
             recorded_steps = f["observations/qpos"].shape[0]
             recorded_arm = "left" if f["observations/qpos"][:, 7].min() < 0.035 else "right"
+            handover = 0
+            if args.handover_before_close is not None:
+                commands = f["joint_commands"][:].astype(np.float64)
+                qpos_all = f["observations/qpos"][:].astype(np.float64)
+                commands = np.where(np.isfinite(commands), commands, qpos_all)  # no command yet: hold
+                g = 7 if recorded_arm == "left" else 15
+                closed = commands[:, g] < 0.03
+                events = np.flatnonzero(~closed[:-1] & closed[1:]) + 1
+                if not len(events):
+                    print(f"{episode}: no recorded gripper close; skipped", flush=True)
+                    continue
+                handover = max(0, int(events[0]) - round(args.handover_before_close * cfg["task"]["fps"]))
         per_episode = scene["pad"].get("per_episode", {}).get(episode)
         if per_episode:  # box and pad shift between sessions
             body = m.geom_bodyid[pad]
@@ -136,9 +151,12 @@ def main():
                 rgb, depth = camera.observe(sim.d)
                 images[f"{name}_depth"], images[f"{name}_rgb"] = depth, rgb
             policy.observe({"images": images, "state": sim.qpos16()})
-            if step % execute_steps == 0:
-                chunk = np.asarray(policy.infer()["actions"])
-            action = chunk[step % execute_steps]
+            if step < handover:
+                action = commands[step]
+            else:
+                if (step - handover) % execute_steps == 0:
+                    chunk = np.asarray(policy.infer()["actions"])
+                action = chunk[(step - handover) % execute_steps]
             states.append(sim.qpos16().copy())
             actions.append(action.copy())
             if not args.no_gif and step % 5 == 0:
@@ -160,7 +178,7 @@ def main():
         states, actions = np.asarray(states), np.asarray(actions)
         active = slice(0, 7) if recorded_arm == "left" else slice(8, 15)
         grip = 7 if recorded_arm == "left" else 15
-        row = {"episode": episode, "recorded_arm": recorded_arm, "steps": len(states),
+        row = {"episode": episode, "recorded_arm": recorded_arm, "steps": len(states), "handover_step": handover,
                "lifted": max_lift > 0.03, "max_lift_m": max_lift, "in_pad": in_pad,
                "tin_end_xy": final[:2].round(4).tolist(),
                "background_color_gain": gains,
@@ -182,6 +200,7 @@ def main():
         raise SystemExit("No episode was rolled out")
     summary = {"checkpoint": str(args.checkpoint), "step": policy.metadata.get("step"), "use_rgb": policy.policy.use_rgb,
                "execute_steps": execute_steps, "seed": args.seed, "episodes": len(rows),
+               "handover_before_close_s": args.handover_before_close,
                "lift_rate": float(np.mean([r["lifted"] for r in rows])),
                "in_pad_rate": float(np.mean([r["in_pad"] for r in rows])),
                "note": "closed loop; observations are simulated, actions come only from the policy"}

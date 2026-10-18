@@ -32,7 +32,8 @@ class OpenArmMeanFlowPolicy:
         if (self.metadata["policy_type"] == "meanflow_depth_v2") != bool(self.config.get("separate_gripper", False)):
             raise ValueError("Release architecture version disagrees with config")
         self.device = "cuda" if device == "auto" and torch.cuda.is_available() else ("cpu" if device == "auto" else device)
-        self.policy = MeanFlowPolicy(**self.config)
+        # Weights come from model.pt: never download pretrained backbone weights when loading a release.
+        self.policy = MeanFlowPolicy(**{**self.config, "pretrained_backbone": False})
         self.policy.load_state_dict(torch.load(directory / "model.pt", map_location="cpu", weights_only=True))
         self.policy.to(self.device).eval().requires_grad_(False)
         self.depth_config = DepthConfig(**self.metadata["depth"])
@@ -58,7 +59,7 @@ class OpenArmMeanFlowPolicy:
             raw = np.asarray(obs["images"][camera])
             if list(raw.shape) != self.metadata["source_shapes"][camera]:
                 raise ValueError(f"{camera}: resolution differs from recording")
-            frames.append(resize_depth(raw, self.depth_config))
+            frames.append(resize_depth(raw, self.depth_config, camera))
         item = {"depth": encode_depth(np.stack(frames), self.depth_config), "agent_pos": state.copy()}
         if self.rgb_config is not None:
             colors = []
@@ -66,7 +67,7 @@ class OpenArmMeanFlowPolicy:
                 raw = np.asarray(obs["images"][camera])
                 if list(raw.shape[:2]) != self.metadata["source_shapes"][camera]:
                     raise ValueError(f"{camera}: resolution differs from recording")
-                colors.append(resize_rgb(raw, self.rgb_config))
+                colors.append(resize_rgb(raw, self.rgb_config, camera))
             item["rgb"] = np.stack(colors)
         if not self.history:
             self.history.extend([item] * self.state_steps)

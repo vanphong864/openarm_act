@@ -21,6 +21,9 @@ def main():
     ap.add_argument("--width", type=int, default=160)
     ap.add_argument("--no-rgb", action="store_true", help="Depth only: skip storing the RGB views (data/rgb)")
     ap.add_argument("--rgb-cameras", nargs=2, default=["chest_rgb", "front_rgb"])
+    ap.add_argument("--crop", nargs=5, action="append", metavar=("CAMERA", "Y0", "Y1", "X0", "X1"), default=[],
+                    help="Fixed region of interest of a camera (recorded pixels), shared by its depth and RGB; "
+                         "e.g. --crop chest 80 480 0 640 --crop front 0 336 0 640")
     ap.add_argument("--depth-scale", type=float, default=0.001)
     ap.add_argument("--action-source", choices=["commands", "next_qpos", "qpos"], default="commands")
     ap.add_argument("--val-fraction", type=float, default=0.15)
@@ -30,8 +33,10 @@ def main():
     ap.add_argument("--max-frames", type=int)
     ap.add_argument("--episodes", nargs="+", help="Explicit episode filenames for a smoke test")
     args = ap.parse_args()
-    cfg = DepthConfig(cameras=tuple(args.cameras), height=args.height, width=args.width, depth_scale=args.depth_scale)
-    rgb = None if args.no_rgb else RGBConfig(cameras=tuple(args.rgb_cameras), height=args.height, width=args.width)
+    crops = {c: [int(v) for v in box] for c, *box in args.crop}
+    cfg = DepthConfig(cameras=tuple(args.cameras), height=args.height, width=args.width, depth_scale=args.depth_scale,
+                      crops=crops)
+    rgb = None if args.no_rgb else RGBConfig(cameras=tuple(args.rgb_cameras), height=args.height, width=args.width, crops=crops)
     metadata = convert_depth(args.raw, args.output, cfg, manifest=args.manifest, action_source=args.action_source,
                              val_fraction=args.val_fraction, seed=args.seed, max_episodes=args.max_episodes,
                              max_frames=args.max_frames, skip_invalid=args.skip_invalid, episode_names=args.episodes, rgb=rgb)

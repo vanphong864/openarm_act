@@ -133,3 +133,49 @@ def test_spatial_softmax_localizes_and_trains(rgb_converted, tmp_path):
     noise = torch.randn(2, 4, 16)
     torch.testing.assert_close(loaded.policy.predict_action(batch["obs"], noise=noise)["action"],
                                model.predict_action(batch["obs"], noise=noise)["action"])
+
+
+def test_workspace_crop_is_shared_by_depth_and_rgb():
+    from openarm_flow.depth_views import resize_depth
+    depth_cfg = DepthConfig(height=16, width=16, crops={"chest": [16, 32, 0, 32]})
+    rgb_cfg = RGBConfig(height=16, width=16, crops={"chest": [16, 32, 0, 32]})
+    depth = np.full((32, 32), 500, dtype="u2")
+    depth[16:] = 800
+    rgb = np.zeros((32, 32, 3), "u1")
+    rgb[16:] = 200
+    assert (resize_depth(depth, depth_cfg, "chest_depth") == 800).all()
+    assert (resize_rgb(rgb, rgb_cfg, "chest_rgb") == 200).all()
+    assert (resize_depth(depth, depth_cfg, "front_depth") != 800).any()  # no crop for this camera
+    with pytest.raises(ValueError, match="crop"):
+        resize_rgb(rgb, RGBConfig(height=16, width=16, crops={"chest": [0, 64, 0, 32]}), "chest_rgb")
+
+
+def test_resnet_backbone_and_state_history_dropout(rgb_converted, tmp_path):
+    path, metadata, _ = rgb_converted
+    data = MeanFlowDataset(path, 4, 2)
+    config = {**model_config(), "use_rgb": True, "spatial_softmax": True, "keypoints": 8,
+              "rgb_backbone": "resnet18", "pretrained_backbone": False, "state_history_dropout": 1.0}
+    model = MeanFlowPolicy(**config)
+    model.set_statistics(data.statistics())
+    batch = next(iter(torch.utils.data.DataLoader(data, batch_size=2)))
+    loss, _ = model.compute_loss(batch)
+    loss.backward()
+    assert torch.isfinite(loss) and model.encoder.rgb_cnn.trunk[0].weight.grad.norm() > 0
+    # With history fully dropped during training, past states cannot change the encoding.
+    torch.manual_seed(0)
+    a = model.encode(batch["obs"], augment=True)
+    shifted = {**batch["obs"], "agent_pos": batch["obs"]["agent_pos"].clone()}
+    shifted["agent_pos"][:, 0] += 1.0
+    model.depth_noise_std = model.pixel_dropout = model.view_dropout = 0.0
+    model.rgb_color_jitter = model.rgb_channel_gain_jitter = 0.0
+    torch.manual_seed(1)
+    b1 = model.encode(batch["obs"], augment=True)
+    torch.manual_seed(1)
+    b2 = model.encode(shifted, augment=True)
+    torch.testing.assert_close(b1, b2)
+    save_meanflow_release(tmp_path / "release", model, {**config, "pretrained_backbone": True}, metadata, 1)
+    model.eval()
+    loaded = OpenArmMeanFlowPolicy(tmp_path / "release", "cpu")  # must not download weights
+    noise = torch.randn(2, 4, 16)
+    torch.testing.assert_close(loaded.policy.predict_action(batch["obs"], noise=noise)["action"],
+                               model.predict_action(batch["obs"], noise=noise)["action"])

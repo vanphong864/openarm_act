@@ -1,6 +1,6 @@
 """Identical train/serve preprocessing of ordered, uncalibrated depth views."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import numpy as np
 import torch
@@ -17,6 +17,7 @@ class DepthConfig:
     max_m: float = 1.2
     min_coverage: float = 0.25
     min_valid_fraction: float = 0.01
+    crops: dict = field(default_factory=dict)  # base camera name -> [y0, y1, x0, x1]
 
     def __post_init__(self):
         if len(self.cameras) != 2 or len(set(self.cameras)) != 2:
@@ -32,7 +33,20 @@ class DepthConfig:
         return {**asdict(self), "cameras": list(self.cameras)}
 
 
-def resize_depth(raw, cfg: DepthConfig):
+def crop_view(raw, crops, camera):
+    """Fixed per-camera region of interest [y0, y1, x0, x1] in recorded pixels (shared by depth and RGB)."""
+    if camera is None or not crops:
+        return raw
+    box = crops.get(camera.removesuffix("_depth").removesuffix("_rgb"))
+    if box is None:
+        return raw
+    y0, y1, x0, x1 = box
+    if not (0 <= y0 < y1 <= raw.shape[0] and 0 <= x0 < x1 <= raw.shape[1]):
+        raise ValueError(f"{camera}: crop {box} outside image {raw.shape[:2]}")
+    return raw[y0:y1, x0:x1]
+
+
+def resize_depth(raw, cfg: DepthConfig, camera: str | None = None):
     """Masked area average in metres, returned as integer depth units (0 = invalid).
 
     Never average missing/clipped pixels into a valid surface. Camera frames stay
@@ -41,6 +55,7 @@ def resize_depth(raw, cfg: DepthConfig):
     raw = np.asarray(raw)
     if raw.ndim != 2 or raw.dtype != np.uint16:
         raise ValueError("Expected raw uint16 depth [H,W] in the recorded depth units")
+    raw = crop_view(raw, cfg.crops, camera)
     depth = raw.astype(np.float32) * cfg.depth_scale
     valid = np.isfinite(depth) & (depth > cfg.min_m) & (depth < cfg.max_m)
     if valid.mean() < cfg.min_valid_fraction:

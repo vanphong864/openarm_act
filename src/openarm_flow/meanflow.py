@@ -39,10 +39,30 @@ class SpatialSoftmaxHead(nn.Module):
         return self.out(torch.cat([px, py, x.mean((2, 3))], dim=-1))
 
 
+class ResNetKeypointTower(nn.Module):
+    """ImageNet ResNet18 stem..layer2 (stride 8, 128 channels) + keypoint head, for normalized RGB input."""
+    def __init__(self, keypoints, feature_dim, pretrained=True):
+        super().__init__()
+        import torchvision
+        weights = torchvision.models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+        net = torchvision.models.resnet18(weights=weights)
+        self.trunk = nn.Sequential(net.conv1, net.bn1, net.relu, net.maxpool, net.layer1, net.layer2)
+        self.head = SpatialSoftmaxHead(128, keypoints, feature_dim)
+        self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1), persistent=False)
+        self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1), persistent=False)
+
+    def forward(self, image):
+        # Policy RGB is (x - .5) / .25 with x in [0, 1]; dropped views are 0 (= mid gray).
+        return self.head(self.trunk(((image * .25 + .5) - self.mean) / self.std))
+
+
 class DualDepthEncoder(nn.Module):
     """Shared small CNN; ordered per-view features retain camera identity and layout."""
-    def __init__(self, feature_dim=96, state_dim=64, use_rgb=False, spatial_softmax=False, keypoints=32):
+    def __init__(self, feature_dim=96, state_dim=64, use_rgb=False, spatial_softmax=False, keypoints=32,
+                 rgb_backbone="cnn", pretrained_backbone=True):
         super().__init__()
+        if rgb_backbone not in ("cnn", "resnet18"):
+            raise ValueError("rgb_backbone must be 'cnn' or 'resnet18'")
 
         def tower(channels):
             if spatial_softmax:  # stride 4 total: 30x40 map for 120x160 input, then keypoints
@@ -61,7 +81,11 @@ class DualDepthEncoder(nn.Module):
                                  nn.Linear(64 * 3 * 4, feature_dim), nn.LayerNorm(feature_dim), nn.SiLU())
 
         self.cnn = tower(4)  # metric-depth encoding, mask, image u and v (not XYZ)
-        self.rgb_cnn = tower(5) if use_rgb else None  # normalized RGB + image u and v
+        self.rgb_resnet = use_rgb and rgb_backbone == "resnet18"
+        if self.rgb_resnet:
+            self.rgb_cnn = ResNetKeypointTower(keypoints, feature_dim, pretrained_backbone)
+        else:
+            self.rgb_cnn = tower(5) if use_rgb else None  # normalized RGB + image u and v
         self.state = nn.Sequential(nn.Linear(16, state_dim), nn.SiLU(), nn.Linear(state_dim, state_dim))
         self.output_dim = 2 * feature_dim * (2 if use_rgb else 1) + state_dim
 
@@ -84,7 +108,9 @@ class DualDepthEncoder(nn.Module):
             if rgb.shape[:3] != (b, t, 2) or rgb.shape[3] != 3:
                 raise ValueError("Expected rgb [B,T,2,3,H,W]")
             image = rgb.reshape(n, 3, *rgb.shape[-2:])
-            features.append(self.rgb_cnn(torch.cat([image, self._coords(image, n)], dim=1)).reshape(b, t, -1))
+            if not self.rgb_resnet:
+                image = torch.cat([image, self._coords(image, n)], dim=1)
+            features.append(self.rgb_cnn(image).reshape(b, t, -1))
         return torch.cat([*features, self.state(state)], dim=-1).flatten(1)
 
 
@@ -162,7 +188,7 @@ class MeanFlowPolicy(nn.Module):
                  tcp_orientation_weight=0.0, gripper_loss_weight=1.0, phase_weight=1.0,
                  tcp_position_scale_m=0.03, tcp_orientation_scale_rad=0.25, use_rgb=False,
                  rgb_color_jitter=0.2, spatial_softmax=False, keypoints=32, rgb_channel_gain_jitter=0.0,
-                 state_noise_std=0.0):
+                 state_noise_std=0.0, state_history_dropout=0.0, rgb_backbone="cnn", pretrained_backbone=True):
         super().__init__()
         if (not down_dims or any(d < 8 or d % 8 for d in down_dims)
                 or min(horizon, n_obs_steps, n_action_steps) < 1
@@ -172,7 +198,7 @@ class MeanFlowPolicy(nn.Module):
             raise ValueError("Invalid feature/time dimensions")
         if not all(0 <= x <= 1 for x in (flow_ratio, pixel_dropout, view_dropout, adaptive_gamma)):
             raise ValueError("Ratios and adaptive_gamma must be in [0,1]")
-        if min(dispersive_weight, depth_noise_std, rgb_color_jitter, rgb_channel_gain_jitter, state_noise_std) < 0 or keypoints < 1:
+        if min(dispersive_weight, depth_noise_std, rgb_color_jitter, rgb_channel_gain_jitter, state_noise_std) < 0 or keypoints < 1 or not 0 <= state_history_dropout <= 1:
             raise ValueError("Loss/noise weights cannot be negative")
         if min(action_loss_weight, tcp_position_weight, tcp_orientation_weight, gripper_loss_weight) < 0:
             raise ValueError("Auxiliary loss weights cannot be negative")
@@ -185,6 +211,7 @@ class MeanFlowPolicy(nn.Module):
         self.separate_gripper = separate_gripper
         self.use_rgb, self.rgb_color_jitter = use_rgb, rgb_color_jitter
         self.rgb_channel_gain_jitter, self.state_noise_std = rgb_channel_gain_jitter, state_noise_std
+        self.state_history_dropout = state_history_dropout
         self.action_loss_weight, self.tcp_position_weight = action_loss_weight, tcp_position_weight
         self.tcp_orientation_weight, self.gripper_loss_weight = tcp_orientation_weight, gripper_loss_weight
         self.phase_weight = phase_weight
@@ -192,7 +219,8 @@ class MeanFlowPolicy(nn.Module):
         self.register_buffer("arm_indices", torch.tensor([i for i in range(16) if i not in (7, 15)]), persistent=False)
         self.register_buffer("gripper_indices", torch.tensor([7, 15]), persistent=False)
         self.flow_dim = 14 if separate_gripper else 16
-        self.encoder = DualDepthEncoder(feature_dim, state_dim, use_rgb, spatial_softmax, keypoints)
+        self.encoder = DualDepthEncoder(feature_dim, state_dim, use_rgb, spatial_softmax, keypoints, rgb_backbone,
+                                       pretrained_backbone)
         condition_dim = self.encoder.output_dim * n_obs_steps
         self.velocity = MeanVelocityUNet(condition_dim, down_dims, time_dim, self.flow_dim)
         self.gripper_head = None
@@ -275,6 +303,11 @@ class MeanFlowPolicy(nn.Module):
             noise = self.state_noise_std * torch.randn_like(state)
             noise[..., self.gripper_indices] *= 0.1
             state = state + noise
+        if augment and self.state_history_dropout:
+            # Hide joint-motion history (keep only the current state) so timing cues such as
+            # "when to close" must come from the images, not from how the joints have been moving.
+            drop = torch.rand(len(state), device=state.device) < self.state_history_dropout
+            state = torch.where(drop[:, None, None], state[:, -1:].expand_as(state), state)
         return self.encoder(depth, (state - self.state_mean) / self.state_scale, rgb)
 
     def _prepare_rgb(self, obs, augment):
