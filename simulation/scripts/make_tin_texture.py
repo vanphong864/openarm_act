@@ -32,6 +32,8 @@ def main():
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--camera", default="chest")
     ap.add_argument("--episode", default="episode_20261013_110137", help="episode có nhãn rõ, nằm gọn trong khung")
+    ap.add_argument("--gain", type=float, nargs=3, default=[1.0, 1.0, 1.0], metavar=("R", "G", "B"),
+                    help="hệ số màu (thật/sim, đo bằng scripts/sim_realism.py): ảnh nguồn ngả màu + đèn sim")
     args = ap.parse_args()
     cfg = load_cfg(args.config, args.raw)
     calib = cfg["_measured"]["cameras"]["cameras"][args.camera]
@@ -50,6 +52,7 @@ def main():
     with h5py.File(args.raw / f"{args.episode}.hdf5", "r") as f:
         rgb = f[f"observations/images/{args.camera}_rgb"][0]
     texture = cv2.warpPerspective(rgb, cv2.getPerspectiveTransform(np.float32(uv), dst), (W, H))
+    texture = np.clip(texture * np.array(args.gain), 0, 255).astype(np.uint8)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     # Ảnh nắn ở trên nhìn từ trên xuống với v = +y là ảnh gương; MuJoCo đặt hàng ảnh đầu ở v lớn: lật dọc.
     cv2.imwrite(str(args.out), texture[::-1, :, ::-1])

@@ -21,8 +21,11 @@ from .render import OffscreenRenderer
 class CompositeCamera:
     def __init__(self, m: mujoco.MjModel, name: str, background_dir: str | Path, size=(640, 480),
                  rng: np.random.Generator | None = None, noise: bool = True, noise_mm_at_0p6: float = 1.0,
-                 edge_jump_m: float = 0.03, tag: str = ""):
+                 edge_jump_m: float = 0.03, tag: str = "", dynamic_depth_scale: float = 1.0):
         self.name, (self.W, self.H) = name, size
+        # Real D435 reads the robot/tin farther than the URDF render (~19 mm, measured by scripts/sim_realism.py);
+        # scale rendered depth of dynamic objects so occlusion and depth match the real camera.
+        self.dynamic_depth_scale = dynamic_depth_scale
         self.dir = Path(background_dir)
         self.set_background(tag)
         self.r = None
@@ -76,7 +79,7 @@ class CompositeCamera:
     def observe(self, d: mujoco.MjData) -> tuple[np.ndarray, np.ndarray]:
         """(rgb uint8 H×W×3, depth uint16 mm H×W) như HDF5 thật."""
         rgb = self.r.rgb(d, self.name, self.opt)
-        z = self.r.depth(d, self.name, self.opt).astype(np.float64)
+        z = self.r.depth(d, self.name, self.opt).astype(np.float64) * self.dynamic_depth_scale
         self.r.r.enable_segmentation_rendering()
         self.r.r.update_scene(d, camera=self.name, scene_option=self.opt)
         seg = self.r.r.render()[..., 0]
@@ -99,6 +102,8 @@ class CompositeCamera:
         valid = (depth_m > 0.2) & (depth_m < 1.2) & ~(jump & front)
         depth = np.where(valid, np.rint(depth_m * 1000), 0).astype(np.uint16)
         out_rgb = np.where(front[..., None], rgb, self.bg_rgb)
+        # geom id của vật động đang hiện (trước nền) ở mỗi pixel, -1 = nền thật; dùng để so vùng sim/thật.
+        self.last_segmentation = np.where(front, seg, -1)
         return out_rgb, depth
 
     def close(self) -> None:

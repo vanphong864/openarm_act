@@ -13,6 +13,9 @@ measurements:
   scene: ../realdata/scene_20261013.json
   joint_offsets: ../realdata/joint_offsets_20261013.json   # q_mô_hình = q_encoder + Δ
 
+composite:                           # camera ghép nền (openarm_sim/composite_camera.py)
+  dynamic_depth_scale: 1.036        # robot sim gần camera hơn depth thật ~19 mm ở ~0.5 m (scripts/sim_realism.py)
+
 background_dir: ../realdata          # ảnh nền thật cho camera ghép nền (make_real_backgrounds.py)
 
 table:                               # bàn gỗ đỡ hộp kê; chỉ phần dưới tầm với có ý nghĩa vật lý
@@ -42,7 +45,7 @@ objects:
     size: [0.088, 0.044, 0.016]
     mass: 0.045                      # ước lượng (hộp kẹo Mentos thiếc đầy); effort tay không đủ nhạy để đo
     friction: [0.6, 0.005, 0.0001]
-    rgba: [0.065, 0.50, 0.30, 1]
+    rgba: [0.077, 0.459, 0.229, 1]   # [0.065, 0.50, 0.30] x màu thật/sim [1.183, 0.917, 0.764] (scripts/sim_realism.py, 2 vòng)
     top_texture: realdata/tin_top.png  # nhãn mặt trên từ ảnh thật (simulation/scripts/make_tin_texture.py)
 
 camera_housings:                     # vỏ D435 có va chạm (tay có thể chạm camera ngực)
