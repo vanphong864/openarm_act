@@ -29,6 +29,8 @@ def main():
     ap.add_argument("--val-fraction", type=float, default=0.15)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--skip-invalid", action="store_true", help="Record rejected episodes and their reasons in metadata")
+    ap.add_argument("--all-train", action="store_true",
+                    help="Every episode is training data (extra data such as simulated demos; no validation split)")
     ap.add_argument("--max-episodes", type=int)
     ap.add_argument("--max-frames", type=int)
     ap.add_argument("--episodes", nargs="+", help="Explicit episode filenames for a smoke test")
@@ -39,7 +41,8 @@ def main():
     rgb = None if args.no_rgb else RGBConfig(cameras=tuple(args.rgb_cameras), height=args.height, width=args.width, crops=crops)
     metadata = convert_depth(args.raw, args.output, cfg, manifest=args.manifest, action_source=args.action_source,
                              val_fraction=args.val_fraction, seed=args.seed, max_episodes=args.max_episodes,
-                             max_frames=args.max_frames, skip_invalid=args.skip_invalid, episode_names=args.episodes, rgb=rgb)
+                             max_frames=args.max_frames, skip_invalid=args.skip_invalid, episode_names=args.episodes, rgb=rgb,
+                             all_train=args.all_train)
     print(f"Saved {len(metadata['episodes'])} episodes; skipped {len(metadata['skipped'])}; {args.output}")
 
 

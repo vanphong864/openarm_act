@@ -47,6 +47,7 @@ class OpenArmMeanFlowPolicy:
 
     def reset(self):
         self.history = deque(maxlen=self.state_steps)
+        self._ensemble, self._tick = [], 0
         self.generator = torch.Generator(device=self.device).manual_seed(self.seed)
 
     def observe(self, obs):
@@ -86,3 +87,26 @@ class OpenArmMeanFlowPolicy:
         if action.shape != (self.chunk_size, 16) or not np.isfinite(action).all():
             raise ValueError("Nonfinite/invalid action chunk")
         return {"actions": action}
+
+    @torch.inference_mode()
+    def infer_ensembled(self, obs=None, *, decay=0.1, horizon=None):
+        """Temporal ensembling (ACT): call once per control tick. Predicts a full chunk every tick and returns the
+        weighted mean of all past chunks' predictions for this tick, weights exp(-decay * i) with i = 0 the
+        oldest prediction. Smooths the closed loop and averages out per-sample noise."""
+        if obs is not None:
+            self.observe(obs)
+        if not self.history:
+            raise ValueError("Call observe() before infer_ensembled()")
+        batch = {key: torch.from_numpy(np.stack([o[key] for o in self.history])[None]).to(self.device)
+                 for key in ("depth", "agent_pos", *(("rgb",) if self.rgb_config else ()))}
+        chunk = self.policy.predict_action(batch, generator=self.generator)["action_pred"][0].cpu().numpy()
+        horizon = min(horizon or len(chunk), len(chunk))
+        self._ensemble.append((self._tick, chunk[:horizon]))
+        self._ensemble = [(t0, c) for t0, c in self._ensemble if self._tick - t0 < len(c)]
+        preds = np.stack([c[self._tick - t0] for t0, c in self._ensemble])  # oldest first
+        weights = np.exp(-decay * np.arange(len(preds)))
+        action = (weights[:, None] * preds).sum(0) / weights.sum()
+        self._tick += 1
+        if action.shape != (16,) or not np.isfinite(action).all():
+            raise ValueError("Nonfinite/invalid ensembled action")
+        return {"action": action}

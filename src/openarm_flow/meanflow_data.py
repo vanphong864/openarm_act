@@ -35,11 +35,11 @@ def grasp_phase_flags(actions, fps):
 
 def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_source="commands",
                   val_fraction=0.15, seed=42, max_episodes=None, max_frames=None,
-                  skip_invalid=False, episode_names=None, rgb: RGBConfig | None = None):
+                  skip_invalid=False, episode_names=None, rgb: RGBConfig | None = None, all_train=False):
     raw, output = Path(raw), Path(output)
     if output.exists():
         raise FileExistsError(f"Output exists: {output}")
-    if not 0 < val_fraction < 1:
+    if not all_train and not 0 < val_fraction < 1:
         raise ValueError("A held-out episode split is required: 0 < val_fraction < 1")
     if any(v is not None and v < 1 for v in (max_episodes, max_frames)):
         raise ValueError("Debug limits must be positive")
@@ -99,9 +99,14 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
             print(f"SKIP {eid}: {exc}", flush=True)
         if max_episodes and len(episodes) >= max_episodes:
             break
-    if len(episodes) < 2:
+    if all_train:  # extra training data (e.g. simulated demos): never validated on
+        for e in episodes:
+            e["split"] = "train"
+    elif len(episodes) < 2:
         raise ValueError("Need at least two readable episodes for train/validation")
-    if not any(e["split"] == "val" for e in episodes):
+    if not episodes:
+        raise ValueError("No readable episodes")
+    if not all_train and not any(e["split"] == "val" for e in episodes):
         ranked = sorted(episodes, key=lambda e: hashlib.sha256(f"{seed}:{e['id']}".encode()).hexdigest())
         for e in ranked[:min(len(ranked) - 1, max(1, round(len(ranked) * val_fraction)))]:
             e["split"] = "val"
@@ -114,6 +119,8 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
                 "action_representation": "absolute_joint_position", "action_source_requested": action_source,
                 "raw_root": str(raw.resolve()), "seed": seed, "complete": False, "skipped": skipped,
                 "debug_subset": bool(max_episodes or max_frames or episode_names)}
+    if all_train:
+        metadata["all_train"] = True
     if rgb is not None:
         metadata["rgb"] = rgb.metadata()
     store.attrs.update(metadata)
@@ -154,7 +161,7 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
         ends.append(offset)
         accepted.append({k: v for k, v in e.items() if k != "path"})
         print(f"{e['id']}: {n} frames, {e['split']}, action={e['action_source']}", flush=True)
-    if {e["split"] for e in accepted} != {"train", "val"}:
+    if not all_train and {e["split"] for e in accepted} != {"train", "val"}:
         raise ValueError("Unreadable frames removed an entire split; rebuild with another split/seed")
     for array in (depth, states, actions, indices, *([rgb_data] if rgb_data is not None else [])):
         array.resize((offset, *array.shape[1:]))

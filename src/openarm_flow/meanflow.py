@@ -41,15 +41,25 @@ class SpatialSoftmaxHead(nn.Module):
 
 class ResNetKeypointTower(nn.Module):
     """ImageNet ResNet18 stem..layer2 (stride 8, 128 channels) + keypoint head, for normalized RGB input."""
-    def __init__(self, keypoints, feature_dim, pretrained=True):
+    def __init__(self, keypoints, feature_dim, pretrained=True, freeze_stem=False):
         super().__init__()
         import torchvision
         weights = torchvision.models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         net = torchvision.models.resnet18(weights=weights)
         self.trunk = nn.Sequential(net.conv1, net.bn1, net.relu, net.maxpool, net.layer1, net.layer2)
+        # Frozen stem + layer1 (weights and BatchNorm statistics): generic low-level ImageNet features
+        # are kept, so fewer parameters can fit appearance details specific to the training images.
+        self.frozen = nn.ModuleList([net.conv1, net.bn1, net.layer1]) if freeze_stem else nn.ModuleList()
+        for p in self.frozen.parameters():
+            p.requires_grad_(False)
         self.head = SpatialSoftmaxHead(128, keypoints, feature_dim)
         self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1), persistent=False)
         self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1), persistent=False)
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.frozen.eval()
+        return self
 
     def forward(self, image):
         # Policy RGB is (x - .5) / .25 with x in [0, 1]; dropped views are 0 (= mid gray).
@@ -59,7 +69,7 @@ class ResNetKeypointTower(nn.Module):
 class DualDepthEncoder(nn.Module):
     """Shared small CNN; ordered per-view features retain camera identity and layout."""
     def __init__(self, feature_dim=96, state_dim=64, use_rgb=False, spatial_softmax=False, keypoints=32,
-                 rgb_backbone="cnn", pretrained_backbone=True):
+                 rgb_backbone="cnn", pretrained_backbone=True, freeze_backbone_stem=False):
         super().__init__()
         if rgb_backbone not in ("cnn", "resnet18"):
             raise ValueError("rgb_backbone must be 'cnn' or 'resnet18'")
@@ -83,7 +93,7 @@ class DualDepthEncoder(nn.Module):
         self.cnn = tower(4)  # metric-depth encoding, mask, image u and v (not XYZ)
         self.rgb_resnet = use_rgb and rgb_backbone == "resnet18"
         if self.rgb_resnet:
-            self.rgb_cnn = ResNetKeypointTower(keypoints, feature_dim, pretrained_backbone)
+            self.rgb_cnn = ResNetKeypointTower(keypoints, feature_dim, pretrained_backbone, freeze_backbone_stem)
         else:
             self.rgb_cnn = tower(5) if use_rgb else None  # normalized RGB + image u and v
         self.state = nn.Sequential(nn.Linear(16, state_dim), nn.SiLU(), nn.Linear(state_dim, state_dim))
@@ -188,7 +198,8 @@ class MeanFlowPolicy(nn.Module):
                  tcp_orientation_weight=0.0, gripper_loss_weight=1.0, phase_weight=1.0,
                  tcp_position_scale_m=0.03, tcp_orientation_scale_rad=0.25, use_rgb=False,
                  rgb_color_jitter=0.2, spatial_softmax=False, keypoints=32, rgb_channel_gain_jitter=0.0,
-                 state_noise_std=0.0, state_history_dropout=0.0, rgb_backbone="cnn", pretrained_backbone=True):
+                 state_noise_std=0.0, state_history_dropout=0.0, rgb_backbone="cnn", pretrained_backbone=True,
+                 freeze_backbone_stem=False, random_shift_px=0, rgb_cutout_prob=0.0, rgb_blur_prob=0.0):
         super().__init__()
         if (not down_dims or any(d < 8 or d % 8 for d in down_dims)
                 or min(horizon, n_obs_steps, n_action_steps) < 1
@@ -198,7 +209,8 @@ class MeanFlowPolicy(nn.Module):
             raise ValueError("Invalid feature/time dimensions")
         if not all(0 <= x <= 1 for x in (flow_ratio, pixel_dropout, view_dropout, adaptive_gamma)):
             raise ValueError("Ratios and adaptive_gamma must be in [0,1]")
-        if min(dispersive_weight, depth_noise_std, rgb_color_jitter, rgb_channel_gain_jitter, state_noise_std) < 0 or keypoints < 1 or not 0 <= state_history_dropout <= 1:
+        if min(dispersive_weight, depth_noise_std, rgb_color_jitter, rgb_channel_gain_jitter, state_noise_std) < 0 or keypoints < 1 or not 0 <= state_history_dropout <= 1 \
+                or random_shift_px < 0 or not (0 <= rgb_cutout_prob <= 1 and 0 <= rgb_blur_prob <= 1):
             raise ValueError("Loss/noise weights cannot be negative")
         if min(action_loss_weight, tcp_position_weight, tcp_orientation_weight, gripper_loss_weight) < 0:
             raise ValueError("Auxiliary loss weights cannot be negative")
@@ -212,6 +224,7 @@ class MeanFlowPolicy(nn.Module):
         self.use_rgb, self.rgb_color_jitter = use_rgb, rgb_color_jitter
         self.rgb_channel_gain_jitter, self.state_noise_std = rgb_channel_gain_jitter, state_noise_std
         self.state_history_dropout = state_history_dropout
+        self.random_shift_px, self.rgb_cutout_prob, self.rgb_blur_prob = random_shift_px, rgb_cutout_prob, rgb_blur_prob
         self.action_loss_weight, self.tcp_position_weight = action_loss_weight, tcp_position_weight
         self.tcp_orientation_weight, self.gripper_loss_weight = tcp_orientation_weight, gripper_loss_weight
         self.phase_weight = phase_weight
@@ -220,7 +233,7 @@ class MeanFlowPolicy(nn.Module):
         self.register_buffer("gripper_indices", torch.tensor([7, 15]), persistent=False)
         self.flow_dim = 14 if separate_gripper else 16
         self.encoder = DualDepthEncoder(feature_dim, state_dim, use_rgb, spatial_softmax, keypoints, rgb_backbone,
-                                       pretrained_backbone)
+                                       pretrained_backbone, freeze_backbone_stem)
         condition_dim = self.encoder.output_dim * n_obs_steps
         self.velocity = MeanVelocityUNet(condition_dim, down_dims, time_dim, self.flow_dim)
         self.gripper_head = None
@@ -298,6 +311,8 @@ class MeanFlowPolicy(nn.Module):
             camera = torch.randint(2, (len(depth),), device=depth.device)
             depth[torch.arange(len(depth), device=depth.device)[drop], :, camera[drop]] = 0
         rgb = self._prepare_rgb(obs, augment) if self.use_rgb else None
+        if augment and self.random_shift_px:
+            depth, rgb = self._random_shift(depth, rgb)
         if augment and self.state_noise_std:
             # Encoder input only (targets unchanged): robustness to the small state errors of closed-loop rollouts.
             noise = self.state_noise_std * torch.randn_like(state)
@@ -331,6 +346,49 @@ class MeanFlowPolicy(nn.Module):
             drop = torch.rand(len(rgb), device=rgb.device) < self.view_dropout
             camera = torch.randint(2, (len(rgb),), device=rgb.device)
             rgb[torch.arange(len(rgb), device=rgb.device)[drop], :, camera[drop]] = 0
+        if augment and self.rgb_blur_prob:
+            rgb = self._random_blur(rgb)
+        if augment and self.rgb_cutout_prob:
+            rgb = self._random_cutout(rgb)
+        return rgb
+
+    def _random_shift(self, depth, rgb):
+        """Translate every camera view by a random whole-pixel offset (same for its depth and RGB and for all
+        history frames), edges replicated: robustness to small camera/robot misplacement in the image."""
+        b, t, v = depth.shape[:3]
+        pad = self.random_shift_px
+        offsets = torch.randint(-pad, pad + 1, (b, 1, v, 2), device=depth.device).expand(b, t, v, 2).reshape(-1, 2)
+
+        def shift(x):
+            n, (h, w) = b * t * v, x.shape[-2:]
+            flat = x.reshape(n, -1, h, w)
+            theta = torch.zeros(n, 2, 3, device=x.device, dtype=x.dtype)
+            theta[:, 0, 0] = theta[:, 1, 1] = 1
+            theta[:, 0, 2] = 2 * offsets[:, 0].to(x.dtype) / w
+            theta[:, 1, 2] = 2 * offsets[:, 1].to(x.dtype) / h
+            grid = F.affine_grid(theta, flat.shape, align_corners=False)
+            return F.grid_sample(flat, grid, mode="nearest", padding_mode="border", align_corners=False).reshape(x.shape)
+
+        return shift(depth), (shift(rgb) if rgb is not None else None)
+
+    def _random_blur(self, rgb):
+        b, t, v, c, h, w = rgb.shape
+        k = torch.tensor([1., 4., 6., 4., 1.], device=rgb.device, dtype=rgb.dtype)
+        kernel = (k[:, None] * k[None]) / 256
+        flat = rgb.reshape(-1, 1, h, w)
+        blurred = F.conv2d(F.pad(flat, (2, 2, 2, 2), mode="replicate"), kernel[None, None]).reshape(rgb.shape)
+        pick = (torch.rand(b, 1, v, 1, 1, 1, device=rgb.device) < self.rgb_blur_prob)
+        return torch.where(pick, blurred, rgb)
+
+    def _random_cutout(self, rgb):
+        """Gray out one random rectangle (10-30% of each side) of some views, the same for all history frames."""
+        b, t, v, c, h, w = rgb.shape
+        rgb = rgb.clone()
+        pick = torch.rand(b, v) < self.rgb_cutout_prob
+        for i, j in pick.nonzero().tolist():
+            ch, cw = int(h * (0.1 + 0.2 * torch.rand(()))), int(w * (0.1 + 0.2 * torch.rand(())))
+            y, x = int(torch.randint(0, h - ch + 1, ())), int(torch.randint(0, w - cw + 1, ()))
+            rgb[i, :, j, :, y:y + ch, x:x + cw] = 0
         return rgb
 
     def compute_loss(self, batch):

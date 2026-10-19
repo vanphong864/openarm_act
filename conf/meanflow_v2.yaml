@@ -21,6 +21,10 @@ model:
   state_history_dropout: 0.5     # hide joint-motion history half the time: close timing must come from images
   rgb_backbone: resnet18         # ImageNet stem..layer2 + keypoints ("cnn" = small CNN from scratch)
   pretrained_backbone: true
+  freeze_backbone_stem: true     # keep ImageNet stem+layer1 (weights and BN stats) fixed
+  random_shift_px: 8             # translate each view by up to 8 px (same for depth/RGB/history)
+  rgb_cutout_prob: 0.25          # gray out one random rectangle of a view
+  rgb_blur_prob: 0.2
   pixel_dropout: 0.02
   view_dropout: 0.1
   adaptive_gamma: 0.5
@@ -38,6 +42,7 @@ train:
   lr: 0.0001
   weight_decay: 0.01
   warmup_steps: 500
+  extra_fraction: 0.3   # share of each batch from --extra-dataset (simulated corrective demos), if given
   save_every: 500
   val_samples_per_episode: 64
   num_workers: 0

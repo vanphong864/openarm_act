@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import torch
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import ConcatDataset, DataLoader, Subset, WeightedRandomSampler
 import yaml
 
 from openarm_flow.meanflow import MeanFlowPolicy
@@ -104,6 +104,9 @@ def main():
     ap.add_argument("--steps", type=int)
     ap.add_argument("--batch-size", type=int)
     ap.add_argument("--resume", action="store_true")
+    ap.add_argument("--extra-dataset", type=Path, action="append", default=[],
+                    help="Extra TRAINING data (converted with --all-train, e.g. simulated corrective demos); mixed into "
+                         "each batch at train.extra_fraction. Validation and normalisation use the main dataset only.")
     args = ap.parse_args()
     cfg = yaml.safe_load(args.config.read_text())
     tr, mc = cfg["train"], cfg["model"]
@@ -124,6 +127,13 @@ def main():
     val = MeanFlowDataset(args.dataset, mc["horizon"], mc["n_obs_steps"], "val")
     if not len(train) or not len(val):
         raise ValueError("Both train and validation episodes are required")
+    extras = [MeanFlowDataset(p, mc["horizon"], mc["n_obs_steps"]) for p in args.extra_dataset]
+    for path, extra in zip(args.extra_dataset, extras):
+        same = ("fps", "depth", "rgb", "joint_names", "action_representation")
+        if any(extra.metadata.get(k) != train.metadata.get(k) for k in same):
+            raise ValueError(f"{path}: preprocessing differs from the main dataset ({', '.join(same)} must match)")
+    extra_metadata = [{"path": str(p), "episodes": len(e.metadata["episodes"]), "frames": len(e)}
+                      for p, e in zip(args.extra_dataset, extras)]
     if bool(mc.get("use_rgb")) != train.has_rgb:
         raise ValueError(f"model.use_rgb={mc.get('use_rgb', False)} but dataset has_rgb={train.has_rgb}; "
                          "convert with --rgb (or set use_rgb accordingly)")
@@ -131,7 +141,8 @@ def main():
     start, best, state = 0, math.inf, None
     if args.resume:
         state = torch.load(args.output / "last.pt", map_location="cpu", weights_only=True)
-        if state["model_config"] != mc or state["metadata"] != train.metadata:
+        if state["model_config"] != mc or state["metadata"] != train.metadata \
+                or [e["path"] for e in state.get("extra_datasets", [])] != [e["path"] for e in extra_metadata]:
             raise ValueError("Resume model/dataset differs from checkpoint")
         saved_train = state["train_config"]
         if any(tr[k] != saved_train[k] for k in tr if k != "steps") or state["seed"] != cfg["seed"]:
@@ -153,8 +164,21 @@ def main():
         shuffle_rng.set_state(state["shuffle_rng"])
         if device.startswith("cuda") and state.get("cuda_rng"):
             torch.cuda.set_rng_state_all(state["cuda_rng"])
-    loader = DataLoader(train, batch_size=tr["batch_size"], shuffle=True, generator=shuffle_rng,
-                        num_workers=tr["num_workers"], pin_memory=device.startswith("cuda"))
+    if extras:
+        fraction = tr.get("extra_fraction", 0.3)
+        if not 0 < fraction < 1:
+            raise ValueError("train.extra_fraction must be in (0, 1)")
+        n_extra = sum(len(e) for e in extras)
+        weights = torch.cat([torch.full((len(train),), (1 - fraction) / len(train)),
+                             torch.full((n_extra,), fraction / n_extra)])
+        sampler = WeightedRandomSampler(weights, num_samples=len(train) + n_extra, replacement=True,
+                                        generator=shuffle_rng)
+        loader = DataLoader(ConcatDataset([train, *extras]), batch_size=tr["batch_size"], sampler=sampler,
+                            num_workers=tr["num_workers"], pin_memory=device.startswith("cuda"))
+        print(f"Extra training data: {extra_metadata}; {fraction:.0%} of each batch", flush=True)
+    else:
+        loader = DataLoader(train, batch_size=tr["batch_size"], shuffle=True, generator=shuffle_rng,
+                            num_workers=tr["num_workers"], pin_memory=device.startswith("cuda"))
     val_loader = DataLoader(Subset(val, val.validation_indices(tr["val_samples_per_episode"])),
                             batch_size=tr["batch_size"], shuffle=False, num_workers=0)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -204,7 +228,8 @@ def main():
                 save_meanflow_release(args.output / "best_release", ema, mc, train.metadata, step)
                 (args.output / "best_metrics.json").write_text(json.dumps(metrics, indent=2))
             checkpoint = {"step": step, "model_config": mc, "train_config": tr, "seed": cfg["seed"],
-                          "metadata": train.metadata, "model": model.state_dict(), "ema": ema.state_dict(),
+                          "metadata": train.metadata, "extra_datasets": extra_metadata,
+                          "model": model.state_dict(), "ema": ema.state_dict(),
                           "optimizer": optimizer.state_dict(), "best_score": best,
                           "selection_metric": selection_metric, "rng": torch.get_rng_state(),
                           "shuffle_rng": shuffle_rng.get_state(),

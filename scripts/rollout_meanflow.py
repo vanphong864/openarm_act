@@ -35,6 +35,8 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--no-gif", action="store_true")
     ap.add_argument("--view", action="store_true", help="Open the interactive MuJoCo viewer (real-time pacing)")
+    ap.add_argument("--temporal-ensemble", type=float, metavar="DECAY",
+                    help="Infer every tick and average overlapping chunks (ACT temporal ensembling, weight exp(-DECAY*i))")
     ap.add_argument("--handover-before-close", type=float, metavar="SECONDS",
                     help="Diagnosis: replay the recorded joint_commands until SECONDS before the recorded gripper "
                          "close, then hand over to the policy (isolates the final grasp from approach drift)")
@@ -154,6 +156,8 @@ def main():
             policy.observe({"images": images, "state": sim.qpos16()})
             if step < handover:
                 action = commands[step]
+            elif args.temporal_ensemble is not None:
+                action = np.asarray(policy.infer_ensembled(decay=args.temporal_ensemble)["action"])
             else:
                 if (step - handover) % execute_steps == 0:
                     chunk = np.asarray(policy.infer()["actions"])
@@ -201,7 +205,7 @@ def main():
         raise SystemExit("No episode was rolled out")
     summary = {"checkpoint": str(args.checkpoint), "step": policy.metadata.get("step"), "use_rgb": policy.policy.use_rgb,
                "execute_steps": execute_steps, "seed": args.seed, "episodes": len(rows),
-               "handover_before_close_s": args.handover_before_close,
+               "handover_before_close_s": args.handover_before_close, "temporal_ensemble_decay": args.temporal_ensemble,
                "lift_rate": float(np.mean([r["lifted"] for r in rows])),
                "in_pad_rate": float(np.mean([r["in_pad"] for r in rows])),
                "note": "closed loop; observations are simulated, actions come only from the policy"}

@@ -1,5 +1,7 @@
 """RGB branch: conversion, dataset batches, gradients, release round trip and misuse errors."""
 
+import json
+from pathlib import Path
 import h5py
 import numpy as np
 import pytest
@@ -179,3 +181,80 @@ def test_resnet_backbone_and_state_history_dropout(rgb_converted, tmp_path):
     noise = torch.randn(2, 4, 16)
     torch.testing.assert_close(loaded.policy.predict_action(batch["obs"], noise=noise)["action"],
                                model.predict_action(batch["obs"], noise=noise)["action"])
+
+
+def test_robustness_augmentations_and_frozen_stem(rgb_converted):
+    path, _, _ = rgb_converted
+    data = MeanFlowDataset(path, 4, 2)
+    config = {**model_config(), "use_rgb": True, "spatial_softmax": True, "keypoints": 8, "rgb_backbone": "resnet18",
+              "pretrained_backbone": False, "freeze_backbone_stem": True, "random_shift_px": 3,
+              "rgb_cutout_prob": 1.0, "rgb_blur_prob": 1.0}
+    model = MeanFlowPolicy(**config)
+    model.set_statistics(data.statistics())
+    batch = next(iter(torch.utils.data.DataLoader(data, batch_size=2)))
+    model.train()
+    tower = model.encoder.rgb_cnn
+    assert not tower.trunk[1].training and tower.trunk[5].training  # frozen BN stays in eval, layer2 trains
+    running = tower.trunk[1].running_mean.clone()
+    loss, _ = model.compute_loss(batch)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert tower.trunk[0].weight.grad is None and tower.trunk[5][0].conv1.weight.grad.norm() > 0
+    torch.testing.assert_close(tower.trunk[1].running_mean, running)
+    # Whole-pixel shift: the image content moves by exactly the offset (interior pixels).
+    depth = torch.arange(16 * 16, dtype=torch.float32).view(1, 1, 1, 1, 16, 16).expand(1, 1, 2, 2, 16, 16).clone()
+    torch.manual_seed(0)
+    shifted, _ = model._random_shift(depth, None)
+    for v in range(2):
+        found = [(dx, dy) for dx in range(-3, 4) for dy in range(-3, 4)
+                 if torch.equal(shifted[0, 0, v, 0, 4:12, 4:12], depth[0, 0, v, 0, 4 + dy:12 + dy, 4 + dx:12 + dx])]
+        assert len(found) == 1
+
+
+def test_temporal_ensembling(rgb_converted, tmp_path):
+    path, metadata, raw = rgb_converted
+    data = MeanFlowDataset(path, 4, 2)
+    config = {**model_config(), "use_rgb": True}
+    model = MeanFlowPolicy(**config)
+    model.set_statistics(data.statistics())
+    save_meanflow_release(tmp_path / "release", model, config, metadata, 1)
+    policy = OpenArmMeanFlowPolicy(tmp_path / "release", "cpu")
+    with h5py.File(raw / "a.hdf5", "r") as f:
+        images = {c: f[f"observations/images/{c}"][0] for c in (*policy.cameras, *policy.rgb_config.cameras)}
+        obs = {"images": images, "state": f["observations/qpos"][0]}
+    first = policy.infer_ensembled(obs)["action"]
+    policy.reset()
+    policy.observe(obs)
+    chunk = policy.policy.predict_action(
+        {k: torch.from_numpy(np.stack([o[k] for o in policy.history])[None]) for k in ("depth", "agent_pos", "rgb")},
+        generator=torch.Generator().manual_seed(42))["action_pred"][0].numpy()
+    np.testing.assert_allclose(first, chunk[0], rtol=1e-5, atol=1e-6)  # one prediction: its first step
+    for _ in range(5):
+        action = policy.infer_ensembled(obs)["action"]
+    assert action.shape == (16,) and len(policy._ensemble) == policy.policy.horizon  # older chunks expired
+
+
+def test_extra_training_dataset(tmp_path):
+    import subprocess, sys, yaml
+    raw, sim = tmp_path / "raw", tmp_path / "sim"
+    raw.mkdir(); sim.mkdir()
+    episode(raw / "a.hdf5"); episode(raw / "b.hdf5", 100); episode(sim / "s.hdf5", 50)
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text("episodes:\n  b:\n    split: val\n")
+    kw = dict(action_source="next_qpos", rgb=RGBConfig(height=16, width=16))
+    convert_depth(raw, tmp_path / "real.zarr", DepthConfig(height=16, width=16), manifest=manifest, **kw)
+    meta = convert_depth(sim, tmp_path / "sim.zarr", DepthConfig(height=16, width=16), all_train=True, **kw)
+    assert meta["all_train"] and {e["split"] for e in meta["episodes"]} == {"train"}
+    root = Path(__file__).parents[1]
+    cfg = yaml.safe_load((root / "conf/meanflow_v2.yaml").read_text())
+    cfg["model"].update(model_config(), use_rgb=True, separate_gripper=False, action_loss_weight=0,
+                        tcp_position_weight=0, tcp_orientation_weight=0, rgb_backbone="cnn")
+    cfg["train"].update(steps=2, batch_size=2, save_every=2, val_samples_per_episode=2, num_workers=0)
+    (tmp_path / "c.yaml").write_text(yaml.safe_dump(cfg))
+    out = subprocess.run([sys.executable, str(root / "scripts/train_meanflow.py"), "--dataset", str(tmp_path / "real.zarr"),
+                          "--extra-dataset", str(tmp_path / "sim.zarr"), "--output", str(tmp_path / "run"),
+                          "--config", str(tmp_path / "c.yaml"), "--device", "cpu"], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert "Extra training data" in out.stdout
+    release = json.loads((tmp_path / "run/best_release/metadata.json").read_text())
+    assert "all_train" not in release  # releases stay tied to the real dataset (evaluation compatibility)
