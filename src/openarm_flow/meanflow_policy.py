@@ -75,14 +75,27 @@ class OpenArmMeanFlowPolicy:
         if self.policy.use_rgb != bool(self.metadata.get("rgb")):
             raise ValueError("Model RGB setting disagrees with release metadata")
         self.rgb_config = RGBConfig(**self.metadata["rgb"]) if self.policy.use_rgb else None
+        self.estimator = self.object_features = None
+        if self.policy.object_features:
+            if not self.metadata.get("objects"):
+                raise ValueError("Model uses object features but the release metadata has no object config")
+            from openarm_flow.object_features import ObjectConfig, ObjectFeatures, SceneEstimator
+            object_config = ObjectConfig.from_metadata(self.metadata["objects"]["config"])
+            self.estimator, self.object_features = SceneEstimator(object_config), ObjectFeatures(object_config)
+            self.object_cameras = list(object_config.cameras)
         self.state_steps, self.chunk_size = self.policy.n_obs_steps, self.policy.n_action_steps
         self.seed = seed
         self.confirmer = GripperCloseConfirmer(close_confirm)
         self.reset()
 
+    def _keys(self):
+        return ("depth", "agent_pos", *(("rgb",) if self.rgb_config else ()),
+                *(("objects",) if self.object_features is not None else ()))
+
     def reset(self):
         self.history = deque(maxlen=self.state_steps)
         self._ensemble, self._tick = [], 0
+        self.scene = None   # object-centric scene, estimated from the first observation of an episode
         if hasattr(self, "confirmer"):
             self.confirmer.reset()
         self.generator = torch.Generator(device=self.device).manual_seed(self.seed)
@@ -99,6 +112,11 @@ class OpenArmMeanFlowPolicy:
                 raise ValueError(f"{camera}: resolution differs from recording")
             frames.append(resize_depth(raw, self.depth_config, camera))
         item = {"depth": encode_depth(np.stack(frames), self.depth_config), "agent_pos": state.copy()}
+        if self.object_features is not None:
+            if self.scene is None:
+                self.scene = self.estimator.estimate({c: np.asarray(obs["images"][f"{c}_rgb"])
+                                                      for c in self.object_cameras})
+            item["objects"] = self.object_features(self.scene, state[None])[0]
         if self.rgb_config is not None:
             colors = []
             for camera in self.rgb_config.cameras:
@@ -119,7 +137,7 @@ class OpenArmMeanFlowPolicy:
         if not self.history:
             raise ValueError("Call observe() before infer()")
         batch = {key: torch.from_numpy(np.stack([o[key] for o in self.history])[None]).to(self.device)
-                 for key in ("depth", "agent_pos", *(("rgb",) if self.rgb_config else ()))}
+                 for key in self._keys()}
         action = self.policy.predict_action(batch, generator=self.generator)["action"][0].cpu().numpy()
         if action.shape != (self.chunk_size, 16) or not np.isfinite(action).all():
             raise ValueError("Nonfinite/invalid action chunk")
@@ -135,7 +153,7 @@ class OpenArmMeanFlowPolicy:
         if not self.history:
             raise ValueError("Call observe() before infer_ensembled()")
         batch = {key: torch.from_numpy(np.stack([o[key] for o in self.history])[None]).to(self.device)
-                 for key in ("depth", "agent_pos", *(("rgb",) if self.rgb_config else ()))}
+                 for key in self._keys()}
         chunk = self.policy.predict_action(batch, generator=self.generator)["action_pred"][0].cpu().numpy()
         horizon = min(horizon or len(chunk), len(chunk))
         self._ensemble.append((self._tick, chunk[:horizon]))

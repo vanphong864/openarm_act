@@ -35,7 +35,10 @@ def grasp_phase_flags(actions, fps):
 
 def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_source="commands",
                   val_fraction=0.15, seed=42, max_episodes=None, max_frames=None,
-                  skip_invalid=False, episode_names=None, rgb: RGBConfig | None = None, all_train=False):
+                  skip_invalid=False, episode_names=None, rgb: RGBConfig | None = None, all_train=False,
+                  objects=None):
+    """objects: an object_features.ObjectConfig to add per-frame object-centric features (scene estimated once
+    from the first recorded frame of each episode, as at deployment)."""
     raw, output = Path(raw), Path(output)
     if output.exists():
         raise FileExistsError(f"Output exists: {output}")
@@ -123,6 +126,12 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
         metadata["all_train"] = True
     if rgb is not None:
         metadata["rgb"] = rgb.metadata()
+    estimator = features = None
+    if objects is not None:
+        from openarm_flow.object_features import FEATURE_NAMES, ObjectFeatures, SceneEstimator
+        estimator, features = SceneEstimator(objects), ObjectFeatures(objects)
+        metadata["objects"] = {"config": objects.metadata(), "features": list(FEATURE_NAMES),
+                               "scene": "estimated once from raw frame 0 of each episode"}
     store.attrs.update(metadata)
     total = sum(e["count"] for e in episodes)
     depth = store.create_dataset("data/depth", shape=(total, 2, cfg.height, cfg.width),
@@ -132,6 +141,11 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
         rgb_data = store.create_dataset("data/rgb", shape=(total, 2, 3, rgb.height, rgb.width),
                                         chunks=(8, 2, 3, rgb.height, rgb.width), dtype="u1")
     states = store.create_dataset("data/state", shape=(total, 16), chunks=(256, 16), dtype="f4")
+    object_data = None
+    if features is not None:
+        from openarm_flow.object_features import FEATURE_DIM
+        object_data = store.create_dataset("data/objects", shape=(total, FEATURE_DIM), chunks=(256, FEATURE_DIM),
+                                           dtype="f4")
     actions = store.create_dataset("data/action", shape=(total, 16), chunks=(256, 16), dtype="f4")
     indices = store.create_dataset("data/source_index", shape=(total,), chunks=(256,), dtype="i8")
     offset, ends, accepted = 0, [], []
@@ -149,6 +163,11 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
                             [np.stack([resize_rgb(reader.file[f"observations/images/{c}"][int(i)], rgb, c)
                                        for c in rgb.cameras]) for i in labels.indices[first:min(first + 8, n)]])
                 states[offset:offset + n] = labels.state[:n]
+                if object_data is not None:
+                    scene = estimator.estimate({c: reader.file[f"observations/images/{c}_rgb"][0]
+                                                for c in objects.cameras})
+                    object_data[offset:offset + n] = features(scene, labels.state[:n])
+                    e["scene"] = scene
                 actions[offset:offset + n] = labels.actions[:n]
                 indices[offset:offset + n] = labels.indices[:n]
         except (OSError, KeyError, ValueError, RuntimeError) as exc:
@@ -163,7 +182,7 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
         print(f"{e['id']}: {n} frames, {e['split']}, action={e['action_source']}", flush=True)
     if not all_train and {e["split"] for e in accepted} != {"train", "val"}:
         raise ValueError("Unreadable frames removed an entire split; rebuild with another split/seed")
-    for array in (depth, states, actions, indices, *([rgb_data] if rgb_data is not None else [])):
+    for array in (depth, states, actions, indices, *(a for a in (rgb_data, object_data) if a is not None)):
         array.resize((offset, *array.shape[1:]))
     store.create_dataset("meta/episode_ends", data=np.asarray(ends, dtype=np.int64))
     metadata.update(episodes=accepted, skipped=skipped, complete=True)
@@ -181,6 +200,7 @@ class MeanFlowDataset(torch.utils.data.Dataset):
             raise ValueError("Invalid split/horizon/history")
         self.cfg = DepthConfig(**self.metadata["depth"])
         self.has_rgb = bool(self.metadata.get("rgb"))
+        self.has_objects = bool(self.metadata.get("objects"))
         self.horizon, self.n_obs_steps, self.split = horizon, n_obs_steps, split
         ends = self.root["meta/episode_ends"][:]
         self.ranges = [(int(a), int(b)) for a, b, e in zip(np.r_[0, ends[:-1]], ends,
@@ -209,6 +229,8 @@ class MeanFlowDataset(torch.utils.data.Dataset):
                "agent_pos": torch.from_numpy(self.root["data/state"].oindex[obs_ids])}
         if self.has_rgb:
             obs["rgb"] = torch.from_numpy(self.root["data/rgb"].oindex[obs_ids])  # uint8 [T,2,3,H,W]
+        if self.has_objects:
+            obs["objects"] = torch.from_numpy(self.root["data/objects"].oindex[obs_ids])  # [T,F]
         return {"obs": obs,
                 "action": torch.from_numpy(actions), "action_valid": torch.from_numpy(valid),
                 "action_approach": torch.from_numpy(approach[local_ids] & valid[:, None]),
@@ -243,6 +265,12 @@ class MeanFlowDataset(torch.utils.data.Dataset):
             floor[[7, 15]] = 0.002 if key == "action" else 0.005
             result[key + "_mean"] = mean.astype("f4")
             result[key + "_scale"] = np.maximum(std, floor).astype("f4")
+        if self.has_objects:
+            values = np.concatenate([self.root["data/objects"][a:b] for a, b in self.ranges]).astype(np.float64)
+            mean, std = values.mean(0), values.std(0)
+            mean[0], std[0] = 0.0, 1.0            # "valid" flag stays 0/1 so a missing scene is visible
+            result["object_mean"] = mean.astype("f4")
+            result["object_scale"] = np.maximum(std, 0.01).astype("f4")
         return result
 
     def validation_indices(self, per_episode=64):

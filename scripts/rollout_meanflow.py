@@ -37,6 +37,10 @@ def main():
     ap.add_argument("--view", action="store_true", help="Open the interactive MuJoCo viewer (real-time pacing)")
     ap.add_argument("--gripper-checkpoint", type=Path,
                     help="Take the two grippers from this release and the arm joints from --checkpoint")
+    ap.add_argument("--tin-from", choices=["auto", "measured", "fitted"], default="auto",
+                    help="Tin start pose: measured (depth, scene_20261013.json) or fitted (the object-feature estimator "
+                         "on the real first frame, i.e. what a deployed policy perceives). auto: fitted for policies "
+                         "with object features")
     ap.add_argument("--close-confirm", type=int, default=1,
                     help="A gripper closes only after N consecutive predictions agree (guards against closing too early)")
     ap.add_argument("--temporal-ensemble", type=float, metavar="DECAY",
@@ -85,6 +89,12 @@ def main():
     if wanted - set(camera_names):
         raise ValueError(f"Policy needs cameras {sorted(wanted)}; the scene provides {camera_names}")
     episodes = args.episodes or cfg["_measured"]["cameras"]["heldout_episodes"]
+    uses_objects = getattr(getattr(policy, "policy", None), "object_features", False)
+    tin_from = ("fitted" if uses_objects else "measured") if args.tin_from == "auto" else args.tin_from
+    estimator = None
+    if tin_from == "fitted":
+        from openarm_flow.object_features import ObjectConfig, SceneEstimator
+        estimator = SceneEstimator(ObjectConfig.from_measurements())
     if args.max_episodes:
         episodes = episodes[:args.max_episodes]
     starts = {r["episode"]: r for r in scene["tin_poses"]["start"]}
@@ -144,8 +154,14 @@ def main():
         with h5py.File(args.raw / f"{episode}.hdf5", "r") as f:
             gains = {name: camera.match_color(f[f"observations/images/{name}_rgb"][0]).round(3).tolist()
                      for name, camera in cameras.items()}
+        tin_xy, tin_yaw = starts[episode]["xy"], starts[episode]["yaw_deg"]
+        if tin_from == "fitted":
+            with h5py.File(args.raw / f"{episode}.hdf5", "r") as f:
+                fitted = estimator.estimate({c: f[f"observations/images/{c}_rgb"][0] for c in camera_names})["tin"]
+            if fitted is not None:
+                tin_xy, tin_yaw = fitted[:2], np.degrees(fitted[2])
         sim.reset(qpos16=q0)
-        set_object(m, sim.d, obj, starts[episode]["xy"], starts[episode]["yaw_deg"], box_top + half_h + 1e-4)
+        set_object(m, sim.d, obj, tin_xy, tin_yaw, box_top + half_h + 1e-4)
         mujoco.mj_forward(m, sim.d)
         sim.settle(0.2)
         policy.reset()
@@ -214,7 +230,7 @@ def main():
     summary = {"checkpoint": str(args.checkpoint), "step": policy.metadata.get("step"), "use_rgb": policy.policy.use_rgb,
                "execute_steps": execute_steps, "seed": args.seed, "episodes": len(rows),
                "handover_before_close_s": args.handover_before_close, "temporal_ensemble_decay": args.temporal_ensemble,
-               "close_confirm": args.close_confirm,
+               "close_confirm": args.close_confirm, "tin_from": tin_from,
                "gripper_checkpoint": None if args.gripper_checkpoint is None else str(args.gripper_checkpoint),
                "lift_rate": float(np.mean([r["lifted"] for r in rows])),
                "in_pad_rate": float(np.mean([r["in_pad"] for r in rows])),

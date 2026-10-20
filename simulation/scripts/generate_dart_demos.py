@@ -54,6 +54,9 @@ def main():
     ap.add_argument("--noise-time", type=float, default=0.3, help="Noise correlation time (s)")
     ap.add_argument("--tin-offset", type=float, default=0.015, help="Std (m) of the tin position offset")
     ap.add_argument("--tin-yaw", type=float, default=20.0, help="Max tin yaw offset (deg)")
+    ap.add_argument("--tin-from", choices=["measured", "fitted"], default="fitted",
+                    help="Centre of the tin start poses: depth-measured, or the object-feature estimate on the real "
+                         "first frame (what the policy's object features see; keeps sim and real features consistent)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prefix", default="sim_dart", help="File name prefix (distinct per parallel worker)")
     ap.add_argument("--out", type=Path, required=True)
@@ -88,6 +91,9 @@ def main():
                                   dynamic_depth_scale=cfg.get("composite", {}).get("dynamic_depth_scale", 1.0))
                for c in names}
     args.out.mkdir(parents=True, exist_ok=True)
+    sys.path.insert(0, str(ROOT / "src"))
+    from openarm_flow.object_features import ObjectConfig, SceneEstimator
+    estimator = SceneEstimator(ObjectConfig.from_measurements())
     theta = 1.0 / (args.noise_time * fps)
     written, attempts, log = 0, 0, []
     max_attempts = args.max_attempts or 3 * args.demos
@@ -113,9 +119,13 @@ def main():
             per_background = background_dir / "bg_episodes" / f"background_{name}_{setup}_rgb.png"
             camera.set_background(f"_{setup}", per_background.parent) if per_background.exists() else camera.set_background("")
             camera.match_color(first_rgb[name])
-        xy = np.asarray(starts[setup]["xy"], float) + np.clip(rng.normal(0, args.tin_offset, 2), -2 * args.tin_offset,
-                                                               2 * args.tin_offset)
-        yaw = starts[setup]["yaw_deg"] + rng.uniform(-args.tin_yaw, args.tin_yaw)
+        base_xy, base_yaw = np.asarray(starts[setup]["xy"], float), starts[setup]["yaw_deg"]
+        if args.tin_from == "fitted":
+            fitted = estimator.estimate(first_rgb)["tin"]
+            if fitted is not None:
+                base_xy, base_yaw = np.asarray(fitted[:2]), np.degrees(fitted[2])
+        xy = base_xy + np.clip(rng.normal(0, args.tin_offset, 2), -2 * args.tin_offset, 2 * args.tin_offset)
+        yaw = base_yaw + rng.uniform(-args.tin_yaw, args.tin_yaw)
         sim.reset(qpos16=q0)
         set_object(m, sim.d, "mentos_tin", xy, yaw, box_top + tin_half[2] + 1e-4)
         mujoco.mj_forward(m, sim.d)

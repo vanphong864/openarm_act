@@ -248,7 +248,7 @@ def test_extra_training_dataset(tmp_path):
     root = Path(__file__).parents[1]
     cfg = yaml.safe_load((root / "conf/meanflow_v2.yaml").read_text())
     cfg["model"].update(model_config(), use_rgb=True, separate_gripper=False, action_loss_weight=0,
-                        tcp_position_weight=0, tcp_orientation_weight=0, rgb_backbone="cnn")
+                        tcp_position_weight=0, tcp_orientation_weight=0, rgb_backbone="cnn", object_features=False)
     cfg["train"].update(steps=2, batch_size=2, save_every=2, val_samples_per_episode=2, num_workers=0)
     (tmp_path / "c.yaml").write_text(yaml.safe_dump(cfg))
     out = subprocess.run([sys.executable, str(root / "scripts/train_meanflow.py"), "--dataset", str(tmp_path / "real.zarr"),

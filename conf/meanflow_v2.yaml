@@ -18,13 +18,16 @@ model:
   rgb_color_jitter: 0.2
   rgb_channel_gain_jitter: 0.1   # white-balance variation (lighting changes during the day)
   state_noise_std: 0.01          # rad, encoder input only
-  state_history_dropout: 0.5     # hide joint-motion history half the time: close timing must come from images
+  state_history_dropout: 0.0     # run3/run4 used 0.5: more early gripper closes than run2 (which had none)
   rgb_backbone: resnet18         # ImageNet stem..layer2 + keypoints ("cnn" = small CNN from scratch)
   pretrained_backbone: true
   freeze_backbone_stem: true     # keep ImageNet stem+layer1 (weights and BN stats) fixed
   random_shift_px: 8             # translate each view by up to 8 px (same for depth/RGB/history)
   rgb_cutout_prob: 0.25          # gray out one random rectangle of a view
   rgb_blur_prob: 0.2
+  object_features: true          # tin/pad pose + TCP->tin/pad vectors (src/openarm_flow/object_features.py)
+  object_dropout: 0.15           # sometimes hide them (as when the scene estimate fails)
+  object_noise_m: 0.01           # detector-like position noise
   pixel_dropout: 0.02
   view_dropout: 0.1
   adaptive_gamma: 0.5
@@ -32,7 +35,7 @@ model:
   action_loss_weight: 0.5
   tcp_position_weight: 0.1
   tcp_orientation_weight: 0.02
-  gripper_loss_weight: 2.0
+  gripper_loss_weight: 1.0       # run3/run4 used 2.0: more early gripper closes than run2
   phase_weight: 3.0
   tcp_position_scale_m: 0.03
   tcp_orientation_scale_rad: 0.25

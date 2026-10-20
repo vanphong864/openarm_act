@@ -130,10 +130,15 @@ def main():
     extras = [MeanFlowDataset(p, mc["horizon"], mc["n_obs_steps"]) for p in args.extra_dataset]
     for path, extra in zip(args.extra_dataset, extras):
         same = ("fps", "depth", "rgb", "joint_names", "action_representation")
+        if (extra.metadata.get("objects") or {}).get("config") != (train.metadata.get("objects") or {}).get("config"):
+            raise ValueError(f"{path}: object feature config differs from the main dataset")
         if any(extra.metadata.get(k) != train.metadata.get(k) for k in same):
             raise ValueError(f"{path}: preprocessing differs from the main dataset ({', '.join(same)} must match)")
     extra_metadata = [{"path": str(p), "episodes": len(e.metadata["episodes"]), "frames": len(e)}
                       for p, e in zip(args.extra_dataset, extras)]
+    if bool(mc.get("object_features")) != train.has_objects:
+        raise ValueError(f"model.object_features={mc.get('object_features', False)} but dataset has_objects="
+                         f"{train.has_objects}; convert with --object-features (or set object_features accordingly)")
     if bool(mc.get("use_rgb")) != train.has_rgb:
         raise ValueError(f"model.use_rgb={mc.get('use_rgb', False)} but dataset has_rgb={train.has_rgb}; "
                          "convert with --rgb (or set use_rgb accordingly)")

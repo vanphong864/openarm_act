@@ -69,7 +69,7 @@ class ResNetKeypointTower(nn.Module):
 class DualDepthEncoder(nn.Module):
     """Shared small CNN; ordered per-view features retain camera identity and layout."""
     def __init__(self, feature_dim=96, state_dim=64, use_rgb=False, spatial_softmax=False, keypoints=32,
-                 rgb_backbone="cnn", pretrained_backbone=True, freeze_backbone_stem=False):
+                 rgb_backbone="cnn", pretrained_backbone=True, freeze_backbone_stem=False, object_dim=0):
         super().__init__()
         if rgb_backbone not in ("cnn", "resnet18"):
             raise ValueError("rgb_backbone must be 'cnn' or 'resnet18'")
@@ -97,7 +97,9 @@ class DualDepthEncoder(nn.Module):
         else:
             self.rgb_cnn = tower(5) if use_rgb else None  # normalized RGB + image u and v
         self.state = nn.Sequential(nn.Linear(16, state_dim), nn.SiLU(), nn.Linear(state_dim, state_dim))
-        self.output_dim = 2 * feature_dim * (2 if use_rgb else 1) + state_dim
+        self.objects = (nn.Sequential(nn.Linear(object_dim, state_dim), nn.SiLU(), nn.Linear(state_dim, state_dim))
+                        if object_dim else None)
+        self.output_dim = 2 * feature_dim * (2 if use_rgb else 1) + state_dim * (2 if object_dim else 1)
 
     @staticmethod
     def _coords(like, n):
@@ -106,7 +108,7 @@ class DualDepthEncoder(nn.Module):
                                 torch.linspace(-1, 1, w, device=like.device, dtype=like.dtype), indexing="ij")
         return torch.stack([xx, yy])[None].expand(n, -1, -1, -1)
 
-    def forward(self, depth, state, rgb=None):
+    def forward(self, depth, state, rgb=None, objects=None):
         b, t, v, c, h, w = depth.shape
         if v != 2 or c != 2 or state.shape != (b, t, 16):
             raise ValueError("Expected depth [B,T,2,2,H,W] and state [B,T,16]")
@@ -121,6 +123,10 @@ class DualDepthEncoder(nn.Module):
             if not self.rgb_resnet:
                 image = torch.cat([image, self._coords(image, n)], dim=1)
             features.append(self.rgb_cnn(image).reshape(b, t, -1))
+        if (objects is None) != (self.objects is None):
+            raise ValueError("Object features must be given exactly when the encoder uses them")
+        if objects is not None:
+            features.append(self.objects(objects))
         return torch.cat([*features, self.state(state)], dim=-1).flatten(1)
 
 
@@ -199,7 +205,8 @@ class MeanFlowPolicy(nn.Module):
                  tcp_position_scale_m=0.03, tcp_orientation_scale_rad=0.25, use_rgb=False,
                  rgb_color_jitter=0.2, spatial_softmax=False, keypoints=32, rgb_channel_gain_jitter=0.0,
                  state_noise_std=0.0, state_history_dropout=0.0, rgb_backbone="cnn", pretrained_backbone=True,
-                 freeze_backbone_stem=False, random_shift_px=0, rgb_cutout_prob=0.0, rgb_blur_prob=0.0):
+                 freeze_backbone_stem=False, random_shift_px=0, rgb_cutout_prob=0.0, rgb_blur_prob=0.0,
+                 object_features=False, object_dropout=0.0, object_noise_m=0.0):
         super().__init__()
         if (not down_dims or any(d < 8 or d % 8 for d in down_dims)
                 or min(horizon, n_obs_steps, n_action_steps) < 1
@@ -225,6 +232,9 @@ class MeanFlowPolicy(nn.Module):
         self.rgb_channel_gain_jitter, self.state_noise_std = rgb_channel_gain_jitter, state_noise_std
         self.state_history_dropout = state_history_dropout
         self.random_shift_px, self.rgb_cutout_prob, self.rgb_blur_prob = random_shift_px, rgb_cutout_prob, rgb_blur_prob
+        if not 0 <= object_dropout <= 1 or object_noise_m < 0:
+            raise ValueError("Invalid object feature augmentation")
+        self.object_features, self.object_dropout, self.object_noise_m = object_features, object_dropout, object_noise_m
         self.action_loss_weight, self.tcp_position_weight = action_loss_weight, tcp_position_weight
         self.tcp_orientation_weight, self.gripper_loss_weight = tcp_orientation_weight, gripper_loss_weight
         self.phase_weight = phase_weight
@@ -233,7 +243,7 @@ class MeanFlowPolicy(nn.Module):
         self.register_buffer("gripper_indices", torch.tensor([7, 15]), persistent=False)
         self.flow_dim = 14 if separate_gripper else 16
         self.encoder = DualDepthEncoder(feature_dim, state_dim, use_rgb, spatial_softmax, keypoints, rgb_backbone,
-                                       pretrained_backbone, freeze_backbone_stem)
+                                       pretrained_backbone, freeze_backbone_stem, self._object_dim())
         condition_dim = self.encoder.output_dim * n_obs_steps
         self.velocity = MeanVelocityUNet(condition_dim, down_dims, time_dim, self.flow_dim)
         self.gripper_head = None
@@ -248,6 +258,9 @@ class MeanFlowPolicy(nn.Module):
             self.register_buffer(name, torch.zeros(16))
         for name in ("state_scale", "action_scale"):
             self.register_buffer(name, torch.ones(16))
+        if object_features:
+            self.register_buffer("object_mean", torch.zeros(self._object_dim()))
+            self.register_buffer("object_scale", torch.ones(self._object_dim()))
         self.register_buffer("stats_ready", torch.tensor(False))
         arm_mask = torch.ones(16)
         arm_mask[[7, 15]] = 0
@@ -259,7 +272,41 @@ class MeanFlowPolicy(nn.Module):
             if value.shape != (16,) or not torch.isfinite(value).all() or ("scale" in name and (value <= 0).any()):
                 raise ValueError(f"Invalid {name}")
             getattr(self, name).copy_(value)
+        if self.object_features:
+            for name in ("object_mean", "object_scale"):
+                value = torch.as_tensor(statistics[name], device=self.state_mean.device)
+                if value.shape != (self._object_dim(),) or not torch.isfinite(value).all():
+                    raise ValueError(f"Invalid {name}")
+                getattr(self, name).copy_(value)
         self.stats_ready.fill_(True)
+
+    def _object_dim(self):
+        if not getattr(self, "object_features", False):
+            return 0
+        from openarm_flow.object_features import FEATURE_DIM
+        return FEATURE_DIM
+
+    def _prepare_objects(self, obs, augment):
+        if "objects" not in obs:
+            raise ValueError("Model uses object features but the observation has no 'objects' [B,T,F]")
+        raw = obs["objects"].float()
+        if augment:
+            raw = raw.clone()
+            b = len(raw)
+            if self.object_noise_m:
+                # Detector-like error: shift the tin / pad estimate, consistently in every derived vector.
+                dt = self.object_noise_m * torch.randn(b, 1, 2, device=raw.device)
+                dp = self.object_noise_m * torch.randn(b, 1, 2, device=raw.device)
+                raw[..., 1:3] += dt
+                raw[..., 6:8] += dp
+                raw[..., 10:12] += dp - dt
+                for col in (12, 17):
+                    raw[..., col:col + 2] += dt
+                    raw[..., col + 3:col + 5] += dp
+            if self.object_dropout:
+                drop = torch.rand(b, device=raw.device) < self.object_dropout
+                raw[drop] = 0                       # valid = 0: as when the scene estimate fails
+        return (raw - self.object_mean) / self.object_scale
 
     def normalize_actions(self, actions, state):
         if self.delta_actions:
@@ -313,6 +360,7 @@ class MeanFlowPolicy(nn.Module):
         rgb = self._prepare_rgb(obs, augment) if self.use_rgb else None
         if augment and self.random_shift_px:
             depth, rgb = self._random_shift(depth, rgb)
+        objects = self._prepare_objects(obs, augment) if self.object_features else None
         if augment and self.state_noise_std:
             # Encoder input only (targets unchanged): robustness to the small state errors of closed-loop rollouts.
             noise = self.state_noise_std * torch.randn_like(state)
@@ -323,7 +371,7 @@ class MeanFlowPolicy(nn.Module):
             # "when to close" must come from the images, not from how the joints have been moving.
             drop = torch.rand(len(state), device=state.device) < self.state_history_dropout
             state = torch.where(drop[:, None, None], state[:, -1:].expand_as(state), state)
-        return self.encoder(depth, (state - self.state_mean) / self.state_scale, rgb)
+        return self.encoder(depth, (state - self.state_mean) / self.state_scale, rgb, objects)
 
     def _prepare_rgb(self, obs, augment):
         if "rgb" not in obs:
