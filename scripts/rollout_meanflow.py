@@ -35,6 +35,10 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--no-gif", action="store_true")
     ap.add_argument("--view", action="store_true", help="Open the interactive MuJoCo viewer (real-time pacing)")
+    ap.add_argument("--gripper-checkpoint", type=Path,
+                    help="Take the two grippers from this release and the arm joints from --checkpoint")
+    ap.add_argument("--close-confirm", type=int, default=1,
+                    help="A gripper closes only after N consecutive predictions agree (guards against closing too early)")
     ap.add_argument("--temporal-ensemble", type=float, metavar="DECAY",
                     help="Infer every tick and average overlapping chunks (ACT temporal ensembling, weight exp(-DECAY*i))")
     ap.add_argument("--handover-before-close", type=float, metavar="SECONDS",
@@ -63,10 +67,14 @@ def main():
     from openarm_sim.runner import Sim
     from openarm_sim.scene import PAD_GEOM
     from replay_real_20261013 import load_cfg, set_object
-    from openarm_flow.meanflow_policy import OpenArmMeanFlowPolicy
+    from openarm_flow.meanflow_policy import HybridMeanFlowPolicy, OpenArmMeanFlowPolicy
 
     torch.set_num_threads(min(4, os.cpu_count() or 1))
-    policy = OpenArmMeanFlowPolicy(args.checkpoint, args.device, seed=args.seed)
+    if args.gripper_checkpoint:
+        policy = HybridMeanFlowPolicy(args.checkpoint, args.gripper_checkpoint, args.device, seed=args.seed,
+                                      close_confirm=args.close_confirm)
+    else:
+        policy = OpenArmMeanFlowPolicy(args.checkpoint, args.device, seed=args.seed, close_confirm=args.close_confirm)
     cfg = load_cfg(args.config, args.raw)
     if int(policy.metadata["fps"]) != cfg["task"]["fps"]:
         raise ValueError("Policy and simulator control rates must match")
@@ -206,6 +214,8 @@ def main():
     summary = {"checkpoint": str(args.checkpoint), "step": policy.metadata.get("step"), "use_rgb": policy.policy.use_rgb,
                "execute_steps": execute_steps, "seed": args.seed, "episodes": len(rows),
                "handover_before_close_s": args.handover_before_close, "temporal_ensemble_decay": args.temporal_ensemble,
+               "close_confirm": args.close_confirm,
+               "gripper_checkpoint": None if args.gripper_checkpoint is None else str(args.gripper_checkpoint),
                "lift_rate": float(np.mean([r["lifted"] for r in rows])),
                "in_pad_rate": float(np.mean([r["in_pad"] for r in rows])),
                "note": "closed loop; observations are simulated, actions come only from the policy"}

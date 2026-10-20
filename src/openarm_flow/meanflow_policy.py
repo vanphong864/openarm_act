@@ -22,8 +22,42 @@ def save_meanflow_release(directory, model, config, metadata, step):
     (directory / "metadata.json").write_text(json.dumps({**metadata, "policy_type": kind, "step": step}, indent=2))
 
 
+class GripperCloseConfirmer:
+    """Closing a gripper too early is harmful (it grabs air), closing a few ticks late is not.
+
+    A gripper may only close after `confirm` consecutive predictions that all want it closed; until then its
+    commands are held at (at least) its current opening. Opening is never delayed.
+    """
+    COLUMNS = (7, 15)
+
+    def __init__(self, confirm=1, threshold=.03):
+        if confirm < 1:
+            raise ValueError("confirm must be at least 1")
+        self.confirm, self.threshold = confirm, threshold
+        self.reset()
+
+    def reset(self):
+        self.votes = {c: 0 for c in self.COLUMNS}
+        self.latched = {c: False for c in self.COLUMNS}
+
+    def __call__(self, chunk, state):
+        """chunk [T,16] -> chunk with unconfirmed closes removed; `state` is the current qpos [16]."""
+        if self.confirm == 1:
+            return chunk
+        chunk = chunk.copy()
+        for c in self.COLUMNS:
+            if chunk[:, c].min() < self.threshold:
+                self.votes[c] += 1
+                self.latched[c] = self.latched[c] or self.votes[c] >= self.confirm
+            else:
+                self.votes[c], self.latched[c] = 0, False
+            if not self.latched[c]:
+                chunk[:, c] = np.maximum(chunk[:, c], max(float(state[c]), self.threshold))
+        return chunk
+
+
 class OpenArmMeanFlowPolicy:
-    def __init__(self, checkpoint, device="auto", seed=42):
+    def __init__(self, checkpoint, device="auto", seed=42, close_confirm=1):
         directory = Path(checkpoint)
         self.config = json.loads((directory / "config.json").read_text())
         self.metadata = json.loads((directory / "metadata.json").read_text())
@@ -43,11 +77,14 @@ class OpenArmMeanFlowPolicy:
         self.rgb_config = RGBConfig(**self.metadata["rgb"]) if self.policy.use_rgb else None
         self.state_steps, self.chunk_size = self.policy.n_obs_steps, self.policy.n_action_steps
         self.seed = seed
+        self.confirmer = GripperCloseConfirmer(close_confirm)
         self.reset()
 
     def reset(self):
         self.history = deque(maxlen=self.state_steps)
         self._ensemble, self._tick = [], 0
+        if hasattr(self, "confirmer"):
+            self.confirmer.reset()
         self.generator = torch.Generator(device=self.device).manual_seed(self.seed)
 
     def observe(self, obs):
@@ -86,7 +123,7 @@ class OpenArmMeanFlowPolicy:
         action = self.policy.predict_action(batch, generator=self.generator)["action"][0].cpu().numpy()
         if action.shape != (self.chunk_size, 16) or not np.isfinite(action).all():
             raise ValueError("Nonfinite/invalid action chunk")
-        return {"actions": action}
+        return {"actions": self.confirmer(action, self.history[-1]["agent_pos"])}
 
     @torch.inference_mode()
     def infer_ensembled(self, obs=None, *, decay=0.1, horizon=None):
@@ -107,6 +144,57 @@ class OpenArmMeanFlowPolicy:
         weights = np.exp(-decay * np.arange(len(preds)))
         action = (weights[:, None] * preds).sum(0) / weights.sum()
         self._tick += 1
+        action = self.confirmer(action[None], self.history[-1]["agent_pos"])[0]
         if action.shape != (16,) or not np.isfinite(action).all():
             raise ValueError("Nonfinite/invalid ensembled action")
         return {"action": action}
+
+
+class HybridMeanFlowPolicy:
+    """Arm joints from one release, the two grippers from another (same observation/control contract).
+
+    The arm policy decides where to go, the gripper policy decides when to close; each preprocesses the raw camera
+    images itself (its own crops, resolution and history), so releases of different families can be combined.
+    """
+
+    def __init__(self, arm_checkpoint, gripper_checkpoint, device="auto", seed=42, **kwargs):
+        self.arm = OpenArmMeanFlowPolicy(arm_checkpoint, device, seed, **kwargs)
+        self.gripper = OpenArmMeanFlowPolicy(gripper_checkpoint, device, seed, **kwargs)
+        a, g = self.arm, self.gripper
+        if (a.chunk_size, a.metadata["fps"]) != (g.chunk_size, g.metadata["fps"]):
+            raise ValueError("Releases must share the action chunk size and control rate")
+        if a.state_steps != g.state_steps:
+            pass  # each keeps its own history; only the chunk length has to agree
+        self.metadata, self.config, self.policy = a.metadata, a.config, a.policy
+        self.device, self.chunk_size, self.state_steps = a.device, a.chunk_size, a.state_steps
+        self.cameras = list(dict.fromkeys([*a.cameras, *g.cameras]))
+        self.rgb_config = a.rgb_config
+        self._gripper_columns = list(GripperCloseConfirmer.COLUMNS)
+
+    @property
+    def history(self):
+        return self.arm.history
+
+    def reset(self):
+        self.arm.reset()
+        self.gripper.reset()
+
+    def observe(self, obs):
+        self.arm.observe(obs)
+        self.gripper.observe(obs)
+
+    def _merge(self, arm_part, gripper_part):
+        merged = np.array(arm_part, copy=True)
+        merged[..., self._gripper_columns] = np.asarray(gripper_part)[..., self._gripper_columns]
+        return merged
+
+    def infer(self, obs=None):
+        if obs is not None:
+            self.observe(obs)
+        return {"actions": self._merge(self.arm.infer()["actions"], self.gripper.infer()["actions"])}
+
+    def infer_ensembled(self, obs=None, **kwargs):
+        if obs is not None:
+            self.observe(obs)
+        return {"action": self._merge(self.arm.infer_ensembled(**kwargs)["action"],
+                                      self.gripper.infer_ensembled(**kwargs)["action"])}

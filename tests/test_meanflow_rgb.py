@@ -258,3 +258,43 @@ def test_extra_training_dataset(tmp_path):
     assert "Extra training data" in out.stdout
     release = json.loads((tmp_path / "run/best_release/metadata.json").read_text())
     assert "all_train" not in release  # releases stay tied to the real dataset (evaluation compatibility)
+
+
+def test_gripper_close_confirmation():
+    from openarm_flow.meanflow_policy import GripperCloseConfirmer
+    confirmer = GripperCloseConfirmer(confirm=3)
+    state = np.zeros(16, "f4")
+    state[[7, 15]] = .043
+    closing = np.zeros((4, 16), "f4")
+    closing[:, 7] = 0.0
+    closing[:, 15] = .043
+    held = [confirmer(closing, state)[:, 7].min() for _ in range(3)]
+    assert held[0] >= .043 and held[1] >= .043 and held[2] == 0.0      # closes on the 3rd agreeing prediction
+    assert confirmer(closing, state)[:, 7].min() == 0.0                 # stays closed while the policy wants it
+    opening = closing.copy(); opening[:, 7] = .043
+    assert confirmer(opening, state)[:, 7].min() == .043                # opening is never delayed
+    assert confirmer(closing, state)[:, 7].min() >= .043                # a broken streak starts over
+    assert (GripperCloseConfirmer(1)(closing, state) == closing).all()
+
+
+def test_hybrid_policy_takes_grippers_from_second_release(rgb_converted, tmp_path):
+    from openarm_flow.meanflow_policy import HybridMeanFlowPolicy
+    path, metadata, raw = rgb_converted
+    data = MeanFlowDataset(path, 4, 2)
+    for name, seed in (("arm", 1), ("grip", 2)):
+        torch.manual_seed(seed)
+        config = {**model_config(), "use_rgb": True, "separate_gripper": True}
+        model = MeanFlowPolicy(**config)
+        model.set_statistics(data.statistics())
+        save_meanflow_release(tmp_path / name, model, config, metadata, 1)
+    hybrid = HybridMeanFlowPolicy(tmp_path / "arm", tmp_path / "grip", "cpu")
+    with h5py.File(raw / "a.hdf5", "r") as f:
+        images = {c: f[f"observations/images/{c}"][0] for c in (*hybrid.cameras, *hybrid.rgb_config.cameras)}
+        obs = {"images": images, "state": f["observations/qpos"][0]}
+    merged = hybrid.infer(obs)["actions"]
+    arm = OpenArmMeanFlowPolicy(tmp_path / "arm", "cpu").infer(obs)["actions"]
+    grip = OpenArmMeanFlowPolicy(tmp_path / "grip", "cpu").infer(obs)["actions"]
+    joints = [i for i in range(16) if i not in (7, 15)]
+    np.testing.assert_allclose(merged[:, joints], arm[:, joints], rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(merged[:, [7, 15]], grip[:, [7, 15]], rtol=1e-5, atol=1e-6)
+    assert not np.allclose(arm[:, [7, 15]], grip[:, [7, 15]])

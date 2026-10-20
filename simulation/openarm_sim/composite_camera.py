@@ -23,9 +23,11 @@ class CompositeCamera:
                  rng: np.random.Generator | None = None, noise: bool = True, noise_mm_at_0p6: float = 1.0,
                  edge_jump_m: float = 0.03, tag: str = "", dynamic_depth_scale: float = 1.0):
         self.name, (self.W, self.H) = name, size
-        # Real D435 reads the robot/tin farther than the URDF render (~19 mm, measured by scripts/sim_realism.py);
-        # scale rendered depth of dynamic objects so occlusion and depth match the real camera.
+        # The real D435 reads the ROBOT ~19 mm farther than its URDF render (scripts/sim_realism.py). Only the
+        # reported depth of robot pixels is scaled: the occlusion test uses the geometric depth, otherwise a thin
+        # object (the 16 mm tin) is pushed behind the real table background and disappears from the image.
         self.dynamic_depth_scale = dynamic_depth_scale
+        self.robot_geoms = None
         self.dir = Path(background_dir)
         self.set_background(tag)
         self.r = None
@@ -63,6 +65,7 @@ class CompositeCamera:
         return gain
 
     def _init_render(self, m, rng, noise, noise_mm_at_0p6, edge_jump_m):
+        self._model = m
         self.r = OffscreenRenderer(m, self.W, self.H)
         self.opt = mujoco.MjvOption()
         self.opt.geomgroup[:] = 0
@@ -79,7 +82,7 @@ class CompositeCamera:
     def observe(self, d: mujoco.MjData) -> tuple[np.ndarray, np.ndarray]:
         """(rgb uint8 H×W×3, depth uint16 mm H×W) như HDF5 thật."""
         rgb = self.r.rgb(d, self.name, self.opt)
-        z = self.r.depth(d, self.name, self.opt).astype(np.float64) * self.dynamic_depth_scale
+        z = self.r.depth(d, self.name, self.opt).astype(np.float64)
         self.r.r.enable_segmentation_rendering()
         self.r.r.update_scene(d, camera=self.name, scene_option=self.opt)
         seg = self.r.r.render()[..., 0]
@@ -89,6 +92,13 @@ class CompositeCamera:
         z_static = self.r.depth(d, self.name, self.opt_static).astype(np.float64)
         occluder = np.where(bgz > 0, bgz, z_static)       # nền thật; chỗ mất depth thì dùng cảnh tĩnh mô hình
         front = dyn & (z < occluder - 0.003)
+        if self.dynamic_depth_scale != 1.0:
+            if self.robot_geoms is None:   # geoms of free bodies (task objects) keep their geometric depth
+                m = self._model
+                free = {b for b in range(m.nbody) if m.body_jntnum[b] and
+                        m.jnt_type[m.body_jntadr[b]] == mujoco.mjtJoint.mjJNT_FREE}
+                self.robot_geoms = np.array([g for g in range(m.ngeom) if m.geom_bodyid[g] not in free])
+            z = np.where(np.isin(seg, self.robot_geoms), z * self.dynamic_depth_scale, z)
         if self.noise:
             z = z + self.rng.normal(0, 1, z.shape) * self.sigma * (z / 0.6) ** 2
             jump = np.zeros(z.shape, bool)
