@@ -40,13 +40,13 @@ model:
   tcp_position_scale_m: 0.03
   tcp_orientation_scale_rad: 0.25
 train:
-  steps: 20000      # run2: best validation at 13500 of 20000; best_release keeps the best
+  steps: 12000      # run5: best at 8500, flat after ~10000; best_release keeps the best
   batch_size: 16
   lr: 0.0001
   weight_decay: 0.01
   warmup_steps: 500
   extra_fraction: 0.3   # share of each batch from --extra-dataset (simulated corrective demos), if given
   save_every: 500
-  val_samples_per_episode: 64
+  val_samples_per_episode: 192   # ~900 approach samples: checkpoint choice less driven by noise in the gripper term
   num_workers: 0
   max_grad_norm: 1.0

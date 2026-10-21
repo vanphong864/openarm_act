@@ -59,8 +59,15 @@ def main():
             wants_close = []   # per sample: (frame, does the chunk close the gripper?)
             grip_err, early, late, flips = [], 0, 0, 0   # approach-window gripper error (mm) and close-timing failures
             previous_open = None
+            # Object features: the scene is estimated once from raw frame 0 (as in conversion and deployment),
+            # not from whatever frame a sample starts at (the hand may already cover the tin there).
+            parts = [getattr(adapter, n) for n in ("arm", "gripper") if hasattr(adapter, n)] or [adapter]
+            scenes = [p.estimator.estimate({c: reader.file[f"observations/images/{c}_rgb"][0] for c in p.object_cameras})
+                      if getattr(p, "estimator", None) is not None else None for p in parts]
             for k in range(adapter.state_steps - 1, len(labels.indices) - adapter.chunk_size, args.stride):
                 adapter.reset()
+                for p, scene in zip(parts, scenes):
+                    p.scene = scene
                 for j in range(k - adapter.state_steps + 1, k + 1):
                     i = int(labels.indices[j])
                     adapter.observe({"images": {c: images[c][i] for c in cameras}, "state": labels.state[j]})
