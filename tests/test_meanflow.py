@@ -110,7 +110,8 @@ def test_corrupt_episode_is_explicitly_reported(tmp_path):
     (raw / "corrupt.hdf5").write_bytes(b"truncated HDF5")
     with pytest.raises(ValueError, match="corrupt"):
         convert_depth(raw, tmp_path / "strict.zarr", DepthConfig(height=16, width=16))
-    meta = convert_depth(raw, tmp_path / "skip.zarr", DepthConfig(height=16, width=16), skip_invalid=True)
+    meta = convert_depth(raw, tmp_path / "skip.zarr", DepthConfig(height=16, width=16), skip_invalid=True,
+                         max_skip_fraction=0.5)
     assert meta["complete"] and len(meta["episodes"]) == 2
     assert meta["skipped"][0]["id"] == "corrupt"
 

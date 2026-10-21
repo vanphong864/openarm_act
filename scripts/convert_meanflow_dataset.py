@@ -33,6 +33,11 @@ def main():
                     help="Add object-centric features (tin/pad pose from the first frame + FK), needs --rgb data")
     ap.add_argument("--all-train", action="store_true",
                     help="Every episode is training data (extra data such as simulated demos; no validation split)")
+    ap.add_argument("--stage-dir", type=Path,
+                    help="Copy each episode here (with retries) before reading it, then delete it: for raw data on a "
+                         "flaky network drive such as Colab's Google Drive")
+    ap.add_argument("--max-skip-fraction", type=float, default=0.1,
+                    help="Abort when more than this fraction of episodes cannot be read")
     ap.add_argument("--max-episodes", type=int)
     ap.add_argument("--max-frames", type=int)
     ap.add_argument("--episodes", nargs="+", help="Explicit episode filenames for a smoke test")
@@ -48,7 +53,8 @@ def main():
     metadata = convert_depth(args.raw, args.output, cfg, manifest=args.manifest, action_source=args.action_source,
                              val_fraction=args.val_fraction, seed=args.seed, max_episodes=args.max_episodes,
                              max_frames=args.max_frames, skip_invalid=args.skip_invalid, episode_names=args.episodes, rgb=rgb,
-                             all_train=args.all_train, objects=objects)
+                             all_train=args.all_train, objects=objects, stage_dir=args.stage_dir,
+                             max_skip_fraction=args.max_skip_fraction)
     print(f"Saved {len(metadata['episodes'])} episodes; skipped {len(metadata['skipped'])}; {args.output}")
 
 

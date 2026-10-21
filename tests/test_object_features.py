@@ -111,3 +111,33 @@ def test_object_features_train_serve_consistency(tmp_path):
     assert policy.infer()["actions"].shape == (3, 16)
     with pytest.raises(ValueError, match="objects"):
         model.encode({k: v for k, v in batch["obs"].items() if k != "objects"})
+
+
+def test_convert_retries_stages_and_aborts_on_unreadable(tmp_path, monkeypatch):
+    import openarm_flow.meanflow_data as md
+    cfg = config()
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    episode(raw / "a.hdf5", cfg)
+    episode(raw / "b.hdf5", cfg, 0.1)
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text("episodes:\n  b:\n    split: val\n")
+    calls = {"n": 0}
+    real_copy = md.shutil.copyfile
+
+    def flaky_copy(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError(107, "Transport endpoint is not connected")
+        return real_copy(src, dst)
+
+    monkeypatch.setattr(md.shutil, "copyfile", flaky_copy)
+    monkeypatch.setattr(md.time, "sleep", lambda s: None)
+    stage = tmp_path / "stage"
+    meta = convert_depth(raw, tmp_path / "ok.zarr", DepthConfig(height=16, width=16), manifest=manifest,
+                         action_source="next_qpos", stage_dir=stage)
+    assert len(meta["episodes"]) == 2 and calls["n"] >= 3 and not list(stage.iterdir())   # retried; staged copies removed
+    monkeypatch.setattr(md.shutil, "copyfile", lambda s, d: (_ for _ in ()).throw(OSError(107, "Transport endpoint")))
+    with pytest.raises(ValueError, match="could not be read"):
+        convert_depth(raw, tmp_path / "bad.zarr", DepthConfig(height=16, width=16), manifest=manifest,
+                      action_source="next_qpos", stage_dir=stage, skip_invalid=True)

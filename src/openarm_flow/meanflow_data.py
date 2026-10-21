@@ -3,6 +3,8 @@
 import hashlib
 import json
 from pathlib import Path
+import shutil
+import time
 
 import numpy as np
 import torch
@@ -33,10 +35,24 @@ def grasp_phase_flags(actions, fps):
     return approach, phase
 
 
+def _retry(action, what, tries=4):
+    """Network drives (Colab's Google Drive) drop the mount now and then: retry reads with growing waits."""
+    for attempt in range(tries):
+        try:
+            return action()
+        except OSError as exc:
+            transient = exc.errno in (5, 103, 104, 107, 110) or "Transport endpoint" in str(exc)
+            if not transient or attempt == tries - 1:   # a truncated/corrupt file will not heal by waiting
+                raise
+            wait = 5 * 3 ** attempt
+            print(f"RETRY {what}: {exc} (attempt {attempt + 1}/{tries}, waiting {wait}s)", flush=True)
+            time.sleep(wait)
+
+
 def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_source="commands",
                   val_fraction=0.15, seed=42, max_episodes=None, max_frames=None,
                   skip_invalid=False, episode_names=None, rgb: RGBConfig | None = None, all_train=False,
-                  objects=None):
+                  objects=None, stage_dir=None, max_skip_fraction=0.1):
     """objects: an object_features.ObjectConfig to add per-frame object-centric features (scene estimated once
     from the first recorded frame of each episode, as at deployment)."""
     raw, output = Path(raw), Path(output)
@@ -57,6 +73,7 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
     for path in paths:
         eid = episode_id(path, raw)
         try:
+            _retry(lambda: EpisodeReader(path).close(), f"open {eid}")
             with EpisodeReader(path) as reader:
                 meta = manifest.resolve(eid, reader.task)
                 if meta.exclude:
@@ -150,8 +167,13 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
     indices = store.create_dataset("data/source_index", shape=(total,), chunks=(256,), dtype="i8")
     offset, ends, accepted = 0, [], []
     for e in episodes:
+        local = e["path"]
         try:
-            with EpisodeReader(e["path"]) as reader:
+            if stage_dir is not None:      # one episode at a time on local disk: raw data can be far larger than it
+                Path(stage_dir).mkdir(parents=True, exist_ok=True)
+                local = Path(stage_dir) / Path(e["path"]).name
+                _retry(lambda: shutil.copyfile(e["path"], local), f"copy {e['id']}")
+            with EpisodeReader(local) as reader:
                 labels = reader.labels(action_source, 50)
                 n = e["count"]
                 for first in range(0, n, 8):
@@ -176,10 +198,17 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
             skipped.append({"id": e["id"], "reason": f"frame read: {exc}"})
             print(f"SKIP {e['id']}: frame read: {exc}", flush=True)
             continue
+        finally:
+            if stage_dir is not None and Path(local) != Path(e["path"]):
+                Path(local).unlink(missing_ok=True)
         offset += n
         ends.append(offset)
         accepted.append({k: v for k, v in e.items() if k != "path"})
         print(f"{e['id']}: {n} frames, {e['split']}, action={e['action_source']}", flush=True)
+    unreadable = [s for s in skipped if s["reason"] != "manifest exclude"]
+    if len(unreadable) > max_skip_fraction * len(paths):
+        raise ValueError(f"{len(unreadable)} of {len(paths)} episodes could not be read (first: {unreadable[0]['reason'][:160]}). "
+                         "On Colab remount Drive (drive.mount(..., force_remount=True)) and convert again.")
     if not all_train and {e["split"] for e in accepted} != {"train", "val"}:
         raise ValueError("Unreadable frames removed an entire split; rebuild with another split/seed")
     for array in (depth, states, actions, indices, *(a for a in (rgb_data, object_data) if a is not None)):
