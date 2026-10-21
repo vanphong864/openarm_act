@@ -52,7 +52,7 @@ def _retry(action, what, tries=4):
 def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_source="commands",
                   val_fraction=0.15, seed=42, max_episodes=None, max_frames=None,
                   skip_invalid=False, episode_names=None, rgb: RGBConfig | None = None, all_train=False,
-                  objects=None, stage_dir=None, max_skip_fraction=0.1):
+                  objects=None, stage_dir=None, max_skip_fraction=0.02):
     """objects: an object_features.ObjectConfig to add per-frame object-centric features (scene estimated once
     from the first recorded frame of each episode, as at deployment)."""
     raw, output = Path(raw), Path(output)
@@ -205,10 +205,14 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
         ends.append(offset)
         accepted.append({k: v for k, v in e.items() if k != "path"})
         print(f"{e['id']}: {n} frames, {e['split']}, action={e['action_source']}", flush=True)
-    unreadable = [s for s in skipped if s["reason"] != "manifest exclude"]
-    if len(unreadable) > max_skip_fraction * len(paths):
-        raise ValueError(f"{len(unreadable)} of {len(paths)} episodes could not be read (first: {unreadable[0]['reason'][:160]}). "
-                         "On Colab remount Drive (drive.mount(..., force_remount=True)) and convert again.")
+    # Truncated / empty files are permanent and simply skipped; a dropped network mount is not, and silently
+    # skipping most of the dataset would produce a useless one.
+    markers = ("Transport endpoint", "Input/output error", "Errno 107", "Errno 5]", "Errno 110", "Errno 104")
+    dropped = [s for s in skipped if any(m in s["reason"] for m in markers)]
+    if len(dropped) > max(2, max_skip_fraction * len(paths)):
+        raise ValueError(f"{len(dropped)} of {len(paths)} episodes failed with network/mount errors (first: "
+                         f"{dropped[0]['reason'][:160]}). On Colab remount Drive "
+                         "(drive.mount(..., force_remount=True)) and convert again.")
     if not all_train and {e["split"] for e in accepted} != {"train", "val"}:
         raise ValueError("Unreadable frames removed an entire split; rebuild with another split/seed")
     for array in (depth, states, actions, indices, *(a for a in (rgb_data, object_data) if a is not None)):

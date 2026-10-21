@@ -36,8 +36,9 @@ def main():
     ap.add_argument("--stage-dir", type=Path,
                     help="Copy each episode here (with retries) before reading it, then delete it: for raw data on a "
                          "flaky network drive such as Colab's Google Drive")
-    ap.add_argument("--max-skip-fraction", type=float, default=0.1,
-                    help="Abort when more than this fraction of episodes cannot be read")
+    ap.add_argument("--max-skip-fraction", type=float, default=0.02,
+                    help="Abort when more than this fraction of episodes (and more than 2) fail with network/mount "
+                         "errors; truncated or empty files are skipped without limit")
     ap.add_argument("--max-episodes", type=int)
     ap.add_argument("--max-frames", type=int)
     ap.add_argument("--episodes", nargs="+", help="Explicit episode filenames for a smoke test")

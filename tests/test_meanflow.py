@@ -111,7 +111,7 @@ def test_corrupt_episode_is_explicitly_reported(tmp_path):
     with pytest.raises(ValueError, match="corrupt"):
         convert_depth(raw, tmp_path / "strict.zarr", DepthConfig(height=16, width=16))
     meta = convert_depth(raw, tmp_path / "skip.zarr", DepthConfig(height=16, width=16), skip_invalid=True,
-                         max_skip_fraction=0.5)
+                         max_skip_fraction=0.5)  # corrupt files are skipped regardless
     assert meta["complete"] and len(meta["episodes"]) == 2
     assert meta["skipped"][0]["id"] == "corrupt"
 

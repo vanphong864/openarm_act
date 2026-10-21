@@ -137,7 +137,9 @@ def test_convert_retries_stages_and_aborts_on_unreadable(tmp_path, monkeypatch):
     meta = convert_depth(raw, tmp_path / "ok.zarr", DepthConfig(height=16, width=16), manifest=manifest,
                          action_source="next_qpos", stage_dir=stage)
     assert len(meta["episodes"]) == 2 and calls["n"] >= 3 and not list(stage.iterdir())   # retried; staged copies removed
+    episode(raw / "c.hdf5", cfg, 0.2)
+    episode(raw / "d.hdf5", cfg, 0.3)
     monkeypatch.setattr(md.shutil, "copyfile", lambda s, d: (_ for _ in ()).throw(OSError(107, "Transport endpoint")))
-    with pytest.raises(ValueError, match="could not be read"):
+    with pytest.raises(ValueError, match="network/mount errors"):
         convert_depth(raw, tmp_path / "bad.zarr", DepthConfig(height=16, width=16), manifest=manifest,
                       action_source="next_qpos", stage_dir=stage, skip_invalid=True)
