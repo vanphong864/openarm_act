@@ -45,6 +45,12 @@ def main():
                     help="A gripper closes only after N consecutive predictions agree (guards against closing too early)")
     ap.add_argument("--temporal-ensemble", type=float, metavar="DECAY",
                     help="Infer every tick and average overlapping chunks (ACT temporal ensembling, weight exp(-DECAY*i))")
+    ap.add_argument("--shadow", action="store_true",
+                    help="Diagnosis: execute the recorded joint_commands for the whole episode; the policy only observes "
+                         "and predicts (saved as policy_actions), so its decisions can be read on the demonstrated path")
+    ap.add_argument("--gripper-sensor", choices=["sim", "commanded-open", "always-open"], default="sim",
+                    help="commanded-open: report 43 mm for a gripper commanded open, as the real gripper does; "
+                         "the simulated fingers wobble a few mm while the arm moves")
     ap.add_argument("--handover-before-close", type=float, metavar="SECONDS",
                     help="Diagnosis: replay the recorded joint_commands until SECONDS before the recorded gripper "
                          "close, then hand over to the policy (isolates the final grasp from approach drift)")
@@ -129,7 +135,7 @@ def main():
             recorded_steps = f["observations/qpos"].shape[0]
             recorded_arm = "left" if f["observations/qpos"][:, 7].min() < 0.035 else "right"
             handover = 0
-            if args.handover_before_close is not None:
+            if args.handover_before_close is not None or args.shadow:
                 commands = f["joint_commands"][:].astype(np.float64)
                 qpos_all = f["observations/qpos"][:].astype(np.float64)
                 commands = np.where(np.isfinite(commands), commands, qpos_all)  # no command yet: hold
@@ -139,7 +145,8 @@ def main():
                 if not len(events):
                     print(f"{episode}: no recorded gripper close; skipped", flush=True)
                     continue
-                handover = max(0, int(events[0]) - round(args.handover_before_close * cfg["task"]["fps"]))
+                handover = (10 ** 9 if args.shadow else
+                            max(0, int(events[0]) - round(args.handover_before_close * cfg["task"]["fps"])))
         per_episode = scene["pad"].get("per_episode", {}).get(episode)
         if per_episode:  # box and pad shift between sessions
             body = m.geom_bodyid[pad]
@@ -167,7 +174,8 @@ def main():
         policy.reset()
         total = round(args.seconds * sim.fps) if args.seconds else recorded_steps
         pad_center, pad_half, pad_rot = sim.d.geom_xpos[pad].copy(), m.geom_size[pad][:2].copy(), sim.d.geom_xmat[pad].reshape(3, 3).copy()
-        states, actions, objects, frames = [], [], [], []
+        states, actions, objects, frames, policy_actions = [], [], [], [], []
+        last_command = sim.qpos16().copy()
         max_lift, chunk, started = 0.0, None, time.monotonic()
         for step in range(total):
             tick = time.monotonic()
@@ -177,8 +185,21 @@ def main():
             for name, camera in cameras.items():
                 rgb, depth = camera.observe(sim.d)
                 images[f"{name}_depth"], images[f"{name}_rgb"] = depth, rgb
-            policy.observe({"images": images, "state": sim.qpos16()})
+            sensed = sim.qpos16()
+            if args.gripper_sensor == "commanded-open":
+                for col in (7, 15):
+                    if last_command[col] >= 0.04:
+                        sensed[col] = 0.043
+            elif args.gripper_sensor == "always-open":   # diagnosis: hide the gripper's own motion from the policy
+                sensed[[7, 15]] = 0.043
+            policy.observe({"images": images, "state": sensed})
             if step < handover:
+                if args.shadow:
+                    if step >= len(commands):
+                        break
+                    if step % execute_steps == 0:
+                        chunk = np.asarray(policy.infer()["actions"])
+                    policy_actions.append(chunk[step % execute_steps].copy())
                 action = commands[step]
             elif args.temporal_ensemble is not None:
                 action = np.asarray(policy.infer_ensembled(decay=args.temporal_ensemble)["action"])
@@ -190,6 +211,7 @@ def main():
             actions.append(action.copy())
             if not args.no_gif and step % 5 == 0:
                 frames.append(Image.fromarray(np.concatenate([images["chest_rgb"], images["front_rgb"]], 1)).resize((640, 240)))
+            last_command = np.asarray(action, float)
             sim.step(action)
             if not np.isfinite(sim.d.qpos).all():
                 raise ValueError("Simulation produced nonfinite joint positions")
@@ -217,7 +239,8 @@ def main():
                "wall_seconds": time.monotonic() - started}
         rows.append(row)
         print(json.dumps(row), flush=True)
-        np.savez_compressed(args.out / f"{episode}.npz", qpos=states, actions=actions, object_xyz=np.asarray(objects))
+        np.savez_compressed(args.out / f"{episode}.npz", qpos=states, actions=actions, object_xyz=np.asarray(objects),
+                            policy_actions=np.asarray(policy_actions))
         if frames:
             frames[0].save(args.out / f"{episode}.gif", save_all=True, append_images=frames[1:],
                            duration=round(5000 / sim.fps), loop=0)
@@ -230,6 +253,7 @@ def main():
     summary = {"checkpoint": str(args.checkpoint), "step": policy.metadata.get("step"), "use_rgb": policy.policy.use_rgb,
                "execute_steps": execute_steps, "seed": args.seed, "episodes": len(rows),
                "handover_before_close_s": args.handover_before_close, "temporal_ensemble_decay": args.temporal_ensemble,
+               "shadow": args.shadow, "gripper_sensor": args.gripper_sensor,
                "close_confirm": args.close_confirm, "tin_from": tin_from,
                "gripper_checkpoint": None if args.gripper_checkpoint is None else str(args.gripper_checkpoint),
                "lift_rate": float(np.mean([r["lifted"] for r in rows])),
