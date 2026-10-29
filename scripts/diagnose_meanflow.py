@@ -58,6 +58,7 @@ def main():
             predicted_close = None
             wants_close = []   # per sample: (frame, does the chunk close the gripper?)
             grip_err, early, late, flips = [], 0, 0, 0   # approach-window gripper error (mm) and close-timing failures
+            held = []   # while the demonstration holds the tin: does the policy keep the gripper closed?
             previous_open = None
             # Object features: the scene is estimated once from raw frame 0 (as in conversion and deployment),
             # not from whatever frame a sample starts at (the hand may already cover the tin there).
@@ -88,6 +89,8 @@ def main():
                 if approach[k, arm]:
                     grip_err.extend(np.abs(chunk[:, grip] - target[:, grip]).tolist())
                 wants_close.append((k, bool(chunk[:, grip].min() < .03)))
+                if closed[k:k + adapter.chunk_size].all():
+                    held.append(bool(chunk[:, grip].max() < .03))
                 is_open = chunk[:, grip].min() >= .03
                 if previous_open is not None and is_open != previous_open and k < (real_close or 0) + 1:
                     flips += 1   # open/close decision changes between consecutive samples before the real close
@@ -101,6 +104,7 @@ def main():
             first = next((wants_close[i + n - 1][0] for i in range(len(wants_close) - n + 1)
                           if all(w for _, w in wants_close[i:i + n])), None)
             row[f"close_error_confirm{n}_s"] = None if None in (real_close, first) else (first - real_close) / fps
+        row["hold_closed_rate"] = float(np.mean(held)) if held else None
         row["approach_gripper_mae_mm"] = float(np.mean(grip_err) * 1000) if grip_err else None
         row["close_decision_flips_before_close"] = flips
         rows.append(row)
@@ -112,6 +116,8 @@ def main():
                               for name, v in values.items()}
             summary[phase]["samples"] = len(values["policy"])
     offsets = [r["close_error_s"] for r in rows if r["close_error_s"] is not None]
+    holds = [r["hold_closed_rate"] for r in rows if r["hold_closed_rate"] is not None]
+    summary["hold_closed_rate"] = float(np.mean(holds)) if holds else None
     summary["approach_gripper_mae_mm"] = float(np.mean([r["approach_gripper_mae_mm"] for r in rows
                                                         if r["approach_gripper_mae_mm"] is not None]))
     for n in (2, 3, 4):

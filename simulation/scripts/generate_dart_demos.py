@@ -57,6 +57,8 @@ def main():
     ap.add_argument("--tin-from", choices=["measured", "fitted"], default="fitted",
                     help="Centre of the tin start poses: depth-measured, or the object-feature estimate on the real "
                          "first frame (what the policy's object features see; keeps sim and real features consistent)")
+    ap.add_argument("--noisy-grasp", action="store_true",
+                    help="Also inject drift while grasping and placing (v2 behaviour; teaches schedule-based closing)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prefix", default="sim_dart", help="File name prefix (distinct per parallel worker)")
     ap.add_argument("--out", type=Path, required=True)
@@ -141,6 +143,11 @@ def main():
             print(f"attempt {attempts} ({setup}): no plan: {exc}", flush=True)
             continue
         sigma = 0.0 if rng.random() < args.clean_fraction else rng.uniform(*args.noise)
+        # Drift only on the way: from just before the descent to the end of the lift, and while lowering onto and
+        # releasing over the pad, the arm runs the clean commands. The expert closes the gripper on a fixed schedule,
+        # so injected drift there would teach "close when it is time" instead of "close at the tin" (run6).
+        tw = expert.times
+        quiet_windows = [] if args.noisy_grasp else [(tw[1] - 0.5, tw[4] + 0.2), (tw[5] - 0.2, tw[8])]
         hold = sim.qpos16().copy()   # encoder units: commands that keep the robot where it is
         noise = np.zeros(7)
         # Images go straight to disk frame by frame (a demo is ~3 MB/frame x ~600 frames: too large to hold in RAM).
@@ -168,9 +175,13 @@ def main():
                 qpos_log.append(sim.qpos16().astype(np.float32))
                 command_log.append(label.astype(np.float32))
                 executed = label.copy()
-                if sigma and HOLD_BEFORE <= step < HOLD_BEFORE + expert.n_steps:
+                t_plan = (step - HOLD_BEFORE) / fps
+                quiet = any(a <= t_plan <= b for a, b in quiet_windows)
+                if sigma and HOLD_BEFORE <= step < HOLD_BEFORE + expert.n_steps and not quiet:
                     noise += -theta * noise + sigma * np.sqrt(2 * theta) * rng.normal(size=7)
                     executed[side.start:side.start + 7] += noise
+                elif quiet:
+                    noise[:] = 0   # no injected drift while descending/closing/lifting or placing/releasing
                 sim.step(executed)
                 if not np.isfinite(sim.d.qpos).all():
                     break

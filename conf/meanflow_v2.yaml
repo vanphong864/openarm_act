@@ -28,6 +28,7 @@ model:
   object_features: true          # tin/pad pose + TCP->tin/pad vectors (src/openarm_flow/object_features.py)
   object_dropout: 0.15           # sometimes hide them (as when the scene estimate fails)
   object_noise_m: 0.01           # detector-like position noise
+  gripper_state_input: false     # hide the measured opening: run5 only closed once it saw the fingers closing (copycat)
   pixel_dropout: 0.02
   view_dropout: 0.1
   adaptive_gamma: 0.5

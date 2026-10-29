@@ -206,7 +206,7 @@ class MeanFlowPolicy(nn.Module):
                  rgb_color_jitter=0.2, spatial_softmax=False, keypoints=32, rgb_channel_gain_jitter=0.0,
                  state_noise_std=0.0, state_history_dropout=0.0, rgb_backbone="cnn", pretrained_backbone=True,
                  freeze_backbone_stem=False, random_shift_px=0, rgb_cutout_prob=0.0, rgb_blur_prob=0.0,
-                 object_features=False, object_dropout=0.0, object_noise_m=0.0):
+                 object_features=False, object_dropout=0.0, object_noise_m=0.0, gripper_state_input=True):
         super().__init__()
         if (not down_dims or any(d < 8 or d % 8 for d in down_dims)
                 or min(horizon, n_obs_steps, n_action_steps) < 1
@@ -235,6 +235,7 @@ class MeanFlowPolicy(nn.Module):
         if not 0 <= object_dropout <= 1 or object_noise_m < 0:
             raise ValueError("Invalid object feature augmentation")
         self.object_features, self.object_dropout, self.object_noise_m = object_features, object_dropout, object_noise_m
+        self.gripper_state_input = gripper_state_input
         self.action_loss_weight, self.tcp_position_weight = action_loss_weight, tcp_position_weight
         self.tcp_orientation_weight, self.gripper_loss_weight = tcp_orientation_weight, gripper_loss_weight
         self.phase_weight = phase_weight
@@ -371,7 +372,12 @@ class MeanFlowPolicy(nn.Module):
             # "when to close" must come from the images, not from how the joints have been moving.
             drop = torch.rand(len(state), device=state.device) < self.state_history_dropout
             state = torch.where(drop[:, None, None], state[:, -1:].expand_as(state), state)
-        return self.encoder(depth, (state - self.state_mean) / self.state_scale, rgb, objects)
+        normalized = (state - self.state_mean) / self.state_scale
+        if not self.gripper_state_input:
+            # The measured opening lags the close command by ~0.4 s; a policy that sees it learns to close only once
+            # the fingers are already closing (copycat), which never starts in closed loop. Hide it, always.
+            normalized = normalized.index_fill(-1, self.gripper_indices, 0.0)
+        return self.encoder(depth, normalized, rgb, objects)
 
     def _prepare_rgb(self, obs, augment):
         if "rgb" not in obs:

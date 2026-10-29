@@ -298,3 +298,23 @@ def test_hybrid_policy_takes_grippers_from_second_release(rgb_converted, tmp_pat
     np.testing.assert_allclose(merged[:, joints], arm[:, joints], rtol=1e-5, atol=1e-6)
     np.testing.assert_allclose(merged[:, [7, 15]], grip[:, [7, 15]], rtol=1e-5, atol=1e-6)
     assert not np.allclose(arm[:, [7, 15]], grip[:, [7, 15]])
+
+
+def test_gripper_state_hidden_from_encoder(rgb_converted):
+    path, _, _ = rgb_converted
+    data = MeanFlowDataset(path, 4, 2)
+    batch = next(iter(torch.utils.data.DataLoader(data, batch_size=2)))
+    changed = {**batch["obs"], "agent_pos": batch["obs"]["agent_pos"].clone()}
+    changed["agent_pos"][..., [7, 15]] = 0.0          # gripper "closing"
+    arm_changed = {**batch["obs"], "agent_pos": batch["obs"]["agent_pos"].clone()}
+    arm_changed["agent_pos"][..., 0] += 0.3
+    for hidden in (False, True):
+        torch.manual_seed(0)
+        model = MeanFlowPolicy(**{**model_config(), "use_rgb": True, "separate_gripper": True,
+                                  "gripper_state_input": not hidden})
+        model.set_statistics(data.statistics())
+        model.eval()
+        base = model.encode(batch["obs"])
+        same = torch.allclose(base, model.encode(changed))
+        assert same == hidden                            # the opening only matters when it is an input
+        assert not torch.allclose(base, model.encode(arm_changed))   # arm joints always are
