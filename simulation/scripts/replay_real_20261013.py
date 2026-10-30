@@ -81,7 +81,8 @@ def main():
     cams, bgdir = {}, None
     if args.render:
         bgdir = (args.config.parent / cfg["background_dir"]).resolve()  # nền tham chiếu
-        cams = {c: CompositeCamera(m, c, bgdir) for c in cfg["_measured"]["cameras"]["cameras"]}
+        cams = {c: CompositeCamera.from_config(m, c, bgdir, cfg.get("composite"))
+                for c in cfg["_measured"]["cameras"]["cameras"]}
     args.out.mkdir(parents=True, exist_ok=True)
     rows = []
     for ep in eps:

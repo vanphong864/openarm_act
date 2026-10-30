@@ -82,8 +82,8 @@ def main():
     pad_xy0 = np.array(scene["pad"]["center"][:2])
     background_dir = (args.config.parent / cfg["background_dir"]).resolve()
     names = cfg["_measured"]["cameras"]["cameras"]
-    cameras = {c: CompositeCamera(m, c, background_dir, rng=np.random.default_rng(args.seed),
-                                  dynamic_depth_scale=cfg.get("composite", {}).get("dynamic_depth_scale", 1.0)) for c in names}
+    cameras = {c: CompositeCamera.from_config(m, c, background_dir, cfg.get("composite"),
+                                              rng=np.random.default_rng(args.seed)) for c in names}
     image_keys = list(policies["real"].cameras) + (list(policies["real"].rgb_config.cameras)
                                                     if policies["real"].rgb_config else [])
     fk = OpenArmKinematics()

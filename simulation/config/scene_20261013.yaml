@@ -15,6 +15,17 @@ measurements:
 
 composite:                           # camera ghép nền (openarm_sim/composite_camera.py)
   dynamic_depth_scale: 1.036        # robot sim gần camera hơn depth thật ~19 mm ở ~0.5 m (scripts/sim_realism.py)
+  # Ngoại hình lớp render, đo trên 13 episode val bằng scripts/compare_sim_images.py: màu robot/hộp kẹo thật / sim,
+  # độ tương phản robot thật / sim (độ lệch chuẩn) và độ nét quanh robot (sim nét hơn ~1.5x khi chưa làm mờ).
+  blur_sigma: 1.2
+  color_gains:
+    chest: {robot: [0.900, 1.113, 1.148], objects: [1.039, 1.091, 1.220], robot_contrast: 0.84}
+    front: {robot: [1.024, 1.031, 0.932], objects: [1.288, 1.041, 1.096], robot_contrast: 0.93}
+  # Xác suất mất depth thêm (theo mảng) trên robot (pixel đen → trắng) và hộp kẹo: D435 thật mất chest 52% / front
+  # 16% pixel robot, 14% / 2% pixel hộp kẹo; render sạch chỉ mất 40% / 2% (ngoài tầm, mép) và 0%.
+  depth_dropout:
+    chest: {robot: [0.14, 0.35], objects: 0.14}
+    front: {robot: [0.03, 0.38], objects: 0.02}
 
 background_dir: ../realdata          # ảnh nền thật cho camera ghép nền (make_real_backgrounds.py)
 

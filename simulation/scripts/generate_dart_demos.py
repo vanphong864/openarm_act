@@ -89,8 +89,8 @@ def main():
     pad_xy0 = np.array(scene["pad"]["center"][:2])
     background_dir = (args.config.parent / cfg["background_dir"]).resolve()
     names = cfg["_measured"]["cameras"]["cameras"]
-    cameras = {c: CompositeCamera(m, c, background_dir, rng=np.random.default_rng(args.seed + 1),
-                                  dynamic_depth_scale=cfg.get("composite", {}).get("dynamic_depth_scale", 1.0))
+    cameras = {c: CompositeCamera.from_config(m, c, background_dir, cfg.get("composite"),
+                                              rng=np.random.default_rng(args.seed + 1))
                for c in names}
     args.out.mkdir(parents=True, exist_ok=True)
     sys.path.insert(0, str(ROOT / "src"))

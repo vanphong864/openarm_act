@@ -115,8 +115,8 @@ def main():
     box_xy0 = m.body_pos[m.geom_bodyid[pad]][:2].copy()
     pad_xy0 = np.array(scene["pad"]["center"][:2])
     background_dir = (args.config.parent / cfg["background_dir"]).resolve()
-    cameras = {c: CompositeCamera(m, c, background_dir, rng=np.random.default_rng(args.seed),
-                                  dynamic_depth_scale=cfg.get("composite", {}).get("dynamic_depth_scale", 1.0)) for c in camera_names}
+    cameras = {c: CompositeCamera.from_config(m, c, background_dir, cfg.get("composite"),
+                                              rng=np.random.default_rng(args.seed)) for c in camera_names}
     execute_steps = min(args.execute_steps or policy.chunk_size, policy.chunk_size)
     args.out.mkdir(parents=True, exist_ok=True)
     rows = []
