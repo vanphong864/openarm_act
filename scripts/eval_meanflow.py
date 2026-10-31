@@ -17,7 +17,7 @@ from train_meanflow import validate
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--checkpoint", type=Path, required=True)
-    ap.add_argument("--dataset", type=Path, required=True)
+    ap.add_argument("--dataset", type=Path, action="append", required=True, help="Repeat for several zarrs")
     ap.add_argument("--device", default="auto")
     ap.add_argument("--samples-per-episode", type=int, default=64)
     ap.add_argument("--batch-size", type=int, default=16)

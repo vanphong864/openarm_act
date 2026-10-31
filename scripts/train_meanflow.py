@@ -15,7 +15,7 @@ from torch.utils.data import ConcatDataset, DataLoader, Subset, WeightedRandomSa
 import yaml
 
 from openarm_flow.meanflow import MeanFlowPolicy
-from openarm_flow.meanflow_data import MeanFlowDataset
+from openarm_flow.meanflow_data import MeanFlowDataset, SAME_PREPROCESSING, same_preprocessing
 from openarm_flow.meanflow_policy import save_meanflow_release
 from openarm_flow.plotting import plot_losses, plot_meanflow_metrics
 
@@ -97,7 +97,9 @@ def validate(model, loader, device, seed):
 def main():
     root = Path(__file__).resolve().parents[1]
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--dataset", type=Path, required=True)
+    ap.add_argument("--dataset", type=Path, action="append", required=True,
+                    help="Main dataset (train + validation + normalisation); repeat to read several zarrs converted "
+                         "the same way (e.g. batches of simulated demos) as one dataset")
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--config", type=Path, default=root / "conf/meanflow_v2.yaml")
     ap.add_argument("--device", default="auto")
@@ -129,11 +131,9 @@ def main():
         raise ValueError("Both train and validation episodes are required")
     extras = [MeanFlowDataset(p, mc["horizon"], mc["n_obs_steps"]) for p in args.extra_dataset]
     for path, extra in zip(args.extra_dataset, extras):
-        same = ("fps", "depth", "rgb", "joint_names", "action_representation")
-        if (extra.metadata.get("objects") or {}).get("config") != (train.metadata.get("objects") or {}).get("config"):
-            raise ValueError(f"{path}: object feature config differs from the main dataset")
-        if any(extra.metadata.get(k) != train.metadata.get(k) for k in same):
-            raise ValueError(f"{path}: preprocessing differs from the main dataset ({', '.join(same)} must match)")
+        if not same_preprocessing(extra.metadata, train.metadata):
+            raise ValueError(f"{path}: preprocessing differs from the main dataset "
+                             f"({', '.join(SAME_PREPROCESSING)} and the object feature config must match)")
     extra_metadata = [{"path": str(p), "episodes": len(e.metadata["episodes"]), "frames": len(e)}
                       for p, e in zip(args.extra_dataset, extras)]
     if bool(mc.get("object_features")) != train.has_objects:

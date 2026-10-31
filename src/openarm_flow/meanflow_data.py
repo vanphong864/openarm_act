@@ -223,24 +223,49 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
     return metadata
 
 
+SAME_PREPROCESSING = ("fps", "depth", "rgb", "joint_names", "action_representation")
+
+
+def same_preprocessing(a, b):
+    """Two datasets' metadata agree on everything the model sees (frames, crops, joints, object features)."""
+    return all(a.get(k) == b.get(k) for k in SAME_PREPROCESSING) \
+        and (a.get("objects") or {}).get("config") == (b.get("objects") or {}).get("config")
+
+
 class MeanFlowDataset(torch.utils.data.Dataset):
     def __init__(self, path, horizon, n_obs_steps, split="train"):
-        self.root = zarr.open_group(str(path), mode="r")
-        self.metadata = dict(self.root.attrs)
-        if self.metadata.get("format") != "openarm_meanflow_depth_v1" or not self.metadata.get("complete"):
-            raise ValueError("Expected complete dual-depth MeanFlow dataset")
+        """`path`: one zarr, or a list of zarrs converted the same way (e.g. batches of simulated demos), read as
+        one dataset: episodes, splits and statistics span all of them."""
+        paths = [path] if isinstance(path, (str, Path)) else list(path)
+        self.roots = [zarr.open_group(str(p), mode="r") for p in paths]
+        metas = [dict(r.attrs) for r in self.roots]
+        for p, meta in zip(paths, metas):
+            if meta.get("format") != "openarm_meanflow_depth_v1" or not meta.get("complete"):
+                raise ValueError(f"{p}: expected complete dual-depth MeanFlow dataset")
+            if not same_preprocessing(meta, metas[0]):
+                raise ValueError(f"{p}: preprocessing differs from {paths[0]}")
+        self.metadata = metas[0] if len(metas) == 1 else {
+            **metas[0], "sources": [str(p) for p in paths],
+            "episodes": [e for m in metas for e in m["episodes"]], "skipped": [s for m in metas for s in m["skipped"]]}
         if split not in ("train", "val") or min(horizon, n_obs_steps) < 1:
             raise ValueError("Invalid split/horizon/history")
         self.cfg = DepthConfig(**self.metadata["depth"])
         self.has_rgb = bool(self.metadata.get("rgb"))
         self.has_objects = bool(self.metadata.get("objects"))
         self.horizon, self.n_obs_steps, self.split = horizon, n_obs_steps, split
-        ends = self.root["meta/episode_ends"][:]
-        self.ranges = [(int(a), int(b)) for a, b, e in zip(np.r_[0, ends[:-1]], ends,
-                        self.metadata["episodes"], strict=True) if e["split"] == split]
+        self.ranges, self.sources = [], []   # episode frame ranges and, per episode, the zarr it is in
+        for source, (root, meta) in enumerate(zip(self.roots, metas)):
+            ends = root["meta/episode_ends"][:]
+            for a, b, e in zip(np.r_[0, ends[:-1]], ends, meta["episodes"], strict=True):
+                if e["split"] == split:
+                    self.ranges.append((int(a), int(b)))
+                    self.sources.append(source)
         self.cumulative = np.cumsum([b - a for a, b in self.ranges])
-        self.phase_flags = [grasp_phase_flags(self.root["data/action"][a:b], self.metadata["fps"])
-                            for a, b in self.ranges]
+        self.phase_flags = [grasp_phase_flags(self._root(i)["data/action"][a:b], self.metadata["fps"])
+                            for i, (a, b) in enumerate(self.ranges)]
+
+    def _root(self, episode):
+        return self.roots[self.sources[episode]]
 
     def __len__(self):
         return int(self.cumulative[-1]) if len(self.cumulative) else 0
@@ -254,16 +279,17 @@ class MeanFlowDataset(torch.utils.data.Dataset):
         obs_ids = np.clip(np.arange(now - self.n_obs_steps + 1, now + 1), start, end - 1)
         # Chunk starts at the current observation, with NO past-action prefix.
         ids = np.arange(now, now + self.horizon)
-        actions = self.root["data/action"].oindex[np.minimum(ids, end - 1)]
+        root = self._root(ep)
+        actions = root["data/action"].oindex[np.minimum(ids, end - 1)]
         local_ids = np.minimum(ids, end - 1) - start
         approach, phase = self.phase_flags[ep]
         valid = ids < end
-        obs = {"depth": torch.from_numpy(encode_depth(self.root["data/depth"].oindex[obs_ids], self.cfg)),
-               "agent_pos": torch.from_numpy(self.root["data/state"].oindex[obs_ids])}
+        obs = {"depth": torch.from_numpy(encode_depth(root["data/depth"].oindex[obs_ids], self.cfg)),
+               "agent_pos": torch.from_numpy(root["data/state"].oindex[obs_ids])}
         if self.has_rgb:
-            obs["rgb"] = torch.from_numpy(self.root["data/rgb"].oindex[obs_ids])  # uint8 [T,2,3,H,W]
+            obs["rgb"] = torch.from_numpy(root["data/rgb"].oindex[obs_ids])  # uint8 [T,2,3,H,W]
         if self.has_objects:
-            obs["objects"] = torch.from_numpy(self.root["data/objects"].oindex[obs_ids])  # [T,F]
+            obs["objects"] = torch.from_numpy(root["data/objects"].oindex[obs_ids])  # [T,F]
         return {"obs": obs,
                 "action": torch.from_numpy(actions), "action_valid": torch.from_numpy(valid),
                 "action_approach": torch.from_numpy(approach[local_ids] & valid[:, None]),
@@ -276,9 +302,9 @@ class MeanFlowDataset(torch.utils.data.Dataset):
         sums = {k: np.zeros(16, np.float64) for k in ("state", "action")}
         squares = {k: np.zeros(16, np.float64) for k in sums}
         counts = dict.fromkeys(sums, 0)
-        for a, b in self.ranges:
-            state = self.root["data/state"][a:b].astype(np.float64)
-            action = self.root["data/action"][a:b].astype(np.float64)
+        for i, (a, b) in enumerate(self.ranges):
+            state = self._root(i)["data/state"][a:b].astype(np.float64)
+            action = self._root(i)["data/action"][a:b].astype(np.float64)
             sums["state"] += state.sum(0)
             squares["state"] += (state**2).sum(0)
             counts["state"] += len(state)
@@ -299,7 +325,8 @@ class MeanFlowDataset(torch.utils.data.Dataset):
             result[key + "_mean"] = mean.astype("f4")
             result[key + "_scale"] = np.maximum(std, floor).astype("f4")
         if self.has_objects:
-            values = np.concatenate([self.root["data/objects"][a:b] for a, b in self.ranges]).astype(np.float64)
+            values = np.concatenate([self._root(i)["data/objects"][a:b]
+                                     for i, (a, b) in enumerate(self.ranges)]).astype(np.float64)
             mean, std = values.mean(0), values.std(0)
             mean[0], std[0] = 0.0, 1.0            # "valid" flag stays 0/1 so a missing scene is visible
             result["object_mean"] = mean.astype("f4")

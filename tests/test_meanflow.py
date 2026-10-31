@@ -102,6 +102,25 @@ def test_episode_boundaries_masks_and_train_only_stats(converted):
     assert val.validation_indices(2) == [0, 4]
 
 
+def test_several_zarrs_read_as_one_dataset(converted, tmp_path):
+    path, meta, raw = converted
+    other = tmp_path / "other.zarr"   # same episodes again, with the states offset by 1000
+    episode(raw / "a.hdf5", 1000)
+    convert_depth(raw, other, DepthConfig(height=16, width=16), manifest=tmp_path / "manifest.yaml",
+                  action_source="next_qpos")
+    single, both = MeanFlowDataset(path, 4, 2), MeanFlowDataset([path, other], 4, 2)
+    assert single.metadata == meta and "sources" not in single.metadata
+    assert len(both) == 2 * len(single) and len(both.metadata["episodes"]) == 4
+    assert both[0]["obs"]["agent_pos"][0, 0] == 0 and both[5]["obs"]["agent_pos"][0, 0] == 1000
+    assert both[9]["action_valid"].tolist() == [True, False, False, False]
+    assert both.statistics()["state_mean"][0] == pytest.approx(502)
+    assert MeanFlowDataset([path, other], 4, 2, "val").validation_indices(2) == [0, 4, 5, 9]
+    convert_depth(raw, tmp_path / "small.zarr", DepthConfig(height=16, width=24), manifest=tmp_path / "manifest.yaml",
+                  action_source="next_qpos")
+    with pytest.raises(ValueError, match="preprocessing differs"):
+        MeanFlowDataset([path, tmp_path / "small.zarr"], 4, 2)
+
+
 def test_corrupt_episode_is_explicitly_reported(tmp_path):
     raw = tmp_path / "raw"
     raw.mkdir()
