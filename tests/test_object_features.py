@@ -68,6 +68,21 @@ def test_scene_estimate_recovers_synthetic_poses():
     assert (ObjectFeatures(cfg)({"tin": None, "pad": scene["pad"]}, np.zeros((1, 16))) == 0).all()
 
 
+def test_scene_estimate_ignores_a_larger_green_stain():
+    # A flat tin-green patch bigger than the tin (as the box stains look in some simulated views) used to win as
+    # the "largest green blob" and the fit then searched around the stain.
+    cfg = config()
+    images = {}
+    for cam in cfg.cameras:
+        img = render(cfg, cam)
+        stain = np.array([[0.29 + dx, -0.15 + dy, cfg.box_top_m] for dx in (-.07, .07) for dy in (-.05, .05)])
+        uv, _ = _project(cfg.cameras[cam], stain)
+        cv2.fillConvexPoly(img, cv2.convexHull(np.round(uv).astype(np.int32)), (25, 140, 60))
+        images[cam] = img
+    x, y, _, fit = SceneEstimator(cfg).estimate(images)["tin"]
+    assert np.hypot(x - TIN[0], y - TIN[1]) < 0.006 and fit > 0.5
+
+
 def episode(path, cfg, offset=0):
     n = 5
     with h5py.File(path, "w") as f:
@@ -143,3 +158,68 @@ def test_convert_retries_stages_and_aborts_on_unreadable(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="network/mount errors"):
         convert_depth(raw, tmp_path / "bad.zarr", DepthConfig(height=16, width=16), manifest=manifest,
                       action_source="next_qpos", stage_dir=stage, skip_invalid=True)
+
+
+def test_ground_truth_scene_object_targets_and_gripper_command(tmp_path):
+    cfg = config()
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    episode(raw / "a.hdf5", cfg)
+    episode(raw / "b.hdf5", cfg, 0.1)
+    truth = (TIN[0] + 0.02, TIN[1] - 0.01)   # the "simulator" knows better than the image estimate
+    with h5py.File(raw / "a.hdf5", "a") as f:
+        q = f["observations/qpos"]
+        q[3:, 7] = q[3:, 15] = 0.01            # gripper commanded closed from frame 2 on (next_qpos labels)
+        pose = np.zeros((5, 7), np.float32)
+        pose[:, :2], pose[:, 2], pose[:, 3] = truth, cfg.box_top_m + 0.008, 1
+        pose[4, 2] += 0.05                     # lifted at the end
+        f.create_dataset("observations/object_pose/mentos_tin", data=pose)
+        for c in cfg.cameras:
+            f.create_dataset(f"observations/object_bbox/{c}", data=np.zeros((5, 5), "i4"))
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text("episodes:\n  b:\n    split: val\n")
+    meta = convert_depth(raw, tmp_path / "d.zarr", DepthConfig(height=16, width=16), manifest=manifest,
+                         action_source="next_qpos", rgb=RGBConfig(height=16, width=16), objects=cfg)
+    plain = MeanFlowDataset(tmp_path / "d.zarr", 4, 2)
+    options = dict(gripper_command=True, object_targets=True, ground_truth_objects=True)
+    data = MeanFlowDataset(tmp_path / "d.zarr", 4, 2, **options)
+    val = MeanFlowDataset(tmp_path / "d.zarr", 4, 2, "val", **options)
+    assert np.hypot(*(plain[0]["obs"]["objects"][0, 1:3].numpy() - TIN[:2])) < 0.006   # estimated
+    np.testing.assert_allclose(data[0]["obs"]["objects"][0, 1:3], truth, atol=1e-6)    # ground truth
+    np.testing.assert_allclose(data.statistics()["object_mean"][1:3], truth, atol=1e-6)
+    item = data[3]                              # observations at frames 2 and 3
+    assert item["obs"]["gripper_command"].tolist() == [[0, 0], [1, 1]]
+    assert data[0]["obs"]["gripper_command"].tolist() == [[0, 0], [0, 0]]
+    assert item["object_target_valid"] and item["object_target"][2] == pytest.approx(cfg.box_top_m + 0.008)
+    tcp = ObjectFeatures(cfg).tcp(item["obs"]["agent_pos"][-1:].numpy())[0]
+    np.testing.assert_allclose(item["object_target"][3:].reshape(2, 3), pose[3, :3] - tcp, atol=1e-5)
+    assert not val[0]["object_target_valid"] and (val[0]["object_target"] == 0).all()
+
+    model_cfg = {**model_config(), "use_rgb": True, "object_features": True, "gripper_state_input": False,
+                 "gripper_command_input": True, "object_aux_weight": 0.1}
+    with pytest.raises(ValueError, match="gripper_state_input"):
+        MeanFlowPolicy(**{**model_cfg, "gripper_state_input": True})
+    model = MeanFlowPolicy(**model_cfg)
+    model.set_statistics(data.statistics())
+    batch = next(iter(torch.utils.data.DataLoader(data, batch_size=4)))
+    loss, parts = model.compute_loss(batch)
+    loss.backward()
+    assert torch.isfinite(loss) and parts["object_aux_loss"] > 0 and model.object_head[0].weight.grad.norm() > 0
+    model.eval()
+    assert model.predict_object(batch["obs"]).shape == (4, 9)
+    flipped = {**batch["obs"], "gripper_command": 1 - batch["obs"]["gripper_command"]}
+    assert not torch.allclose(model.encode(batch["obs"]), model.encode(flipped))
+    with pytest.raises(ValueError, match="gripper_command"):
+        model.encode({k: v for k, v in batch["obs"].items() if k != "gripper_command"})
+
+    save_meanflow_release(tmp_path / "release", model, model_cfg, meta, 1, options)
+    policy = OpenArmMeanFlowPolicy(tmp_path / "release", "cpu")
+    assert policy.metadata["data_options"] == options
+    with h5py.File(raw / "a.hdf5", "r") as f:
+        obs = {"images": {k: f[f"observations/images/{k}"][3] for k in (*policy.cameras, *policy.rgb_config.cameras)},
+               "state": f["observations/qpos"][3]}
+    with pytest.raises(ValueError, match="command"):
+        policy.observe(obs)
+    policy.observe({**obs, "command": np.full(16, 0.01, np.float32)})
+    assert policy.history[-1]["gripper_command"].tolist() == [1, 1]
+    assert policy.infer()["actions"].shape == (3, 16)

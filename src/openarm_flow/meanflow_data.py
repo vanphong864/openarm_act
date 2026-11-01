@@ -49,12 +49,19 @@ def _retry(action, what, tries=4):
             time.sleep(wait)
 
 
+TIN_POSE_KEY = "observations/object_pose/mentos_tin"   # simulated demos only
+
+
 def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_source="commands",
                   val_fraction=0.15, seed=42, max_episodes=None, max_frames=None,
                   skip_invalid=False, episode_names=None, rgb: RGBConfig | None = None, all_train=False,
                   objects=None, stage_dir=None, max_skip_fraction=0.02):
     """objects: an object_features.ObjectConfig to add per-frame object-centric features (scene estimated once
-    from the first recorded frame of each episode, as at deployment)."""
+    from the first recorded frame of each episode, as at deployment).
+
+    Simulated demos also carry the tin's ground truth per frame (generate_dart_demos.py); when any episode has it,
+    it is kept as data/tin_pose [T, 7] (x y z qw qx qy qz, sim world) and data/tin_bbox [T, 2, 5] (x0 y0 x1 y1 in
+    source pixels and visible pixel count, per camera), NaN / -1 for episodes without it. Not a policy input."""
     raw, output = Path(raw), Path(output)
     if output.exists():
         raise FileExistsError(f"Output exists: {output}")
@@ -110,7 +117,8 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
                 labels = reader.labels(action_source, 50)
                 n = min(len(labels.indices), max_frames) if max_frames else len(labels.indices)
                 episodes.append({"id": eid, "path": path, "split": meta.split, "count": n,
-                                 "action_source": labels.source, "notes": labels.notes})
+                                 "action_source": labels.source, "notes": labels.notes,
+                                 **({"ground_truth": True} if TIN_POSE_KEY in f else {})})
                 source_shapes = shapes
         except (OSError, KeyError, ValueError, RuntimeError) as exc:
             if not skip_invalid:
@@ -164,6 +172,16 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
         object_data = store.create_dataset("data/objects", shape=(total, FEATURE_DIM), chunks=(256, FEATURE_DIM),
                                            dtype="f4")
     actions = store.create_dataset("data/action", shape=(total, 16), chunks=(256, 16), dtype="f4")
+    truth = [a.split("_")[0] for a in cfg.cameras] if any(e.get("ground_truth") for e in episodes) else None
+    tin_pose = tin_bbox = None
+    if truth:
+        tin_pose = store.create_dataset("data/tin_pose", shape=(total, 7), chunks=(256, 7), dtype="f4",
+                                        fill_value=np.nan)
+        tin_bbox = store.create_dataset("data/tin_bbox", shape=(total, 2, 5), chunks=(256, 2, 5), dtype="i4",
+                                        fill_value=-1)
+        metadata["ground_truth"] = {"tin_pose": "x y z qw qx qy qz, sim world frame", "tin_bbox_cameras": truth,
+                                    "tin_bbox": "x0 y0 x1 y1 visible_pixels, source pixels"}
+        store.attrs.update(metadata)
     indices = store.create_dataset("data/source_index", shape=(total,), chunks=(256,), dtype="i8")
     offset, ends, accepted = 0, [], []
     for e in episodes:
@@ -192,6 +210,11 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
                     e["scene"] = scene
                 actions[offset:offset + n] = labels.actions[:n]
                 indices[offset:offset + n] = labels.indices[:n]
+                if truth and e.get("ground_truth"):
+                    rows = np.asarray(labels.indices[:n], dtype=np.int64)
+                    tin_pose[offset:offset + n] = reader.file[TIN_POSE_KEY][:][rows]
+                    tin_bbox[offset:offset + n] = np.stack(
+                        [reader.file[f"observations/object_bbox/{c}"][:][rows] for c in truth], 1)
         except (OSError, KeyError, ValueError, RuntimeError) as exc:
             if not skip_invalid:
                 raise ValueError(f"{e['id']}: conversion failed: {exc}") from exc
@@ -215,7 +238,8 @@ def convert_depth(raw, output, cfg=DepthConfig(), *, manifest=None, action_sourc
                          "(drive.mount(..., force_remount=True)) and convert again.")
     if not all_train and {e["split"] for e in accepted} != {"train", "val"}:
         raise ValueError("Unreadable frames removed an entire split; rebuild with another split/seed")
-    for array in (depth, states, actions, indices, *(a for a in (rgb_data, object_data) if a is not None)):
+    for array in (depth, states, actions, indices,
+                  *(a for a in (rgb_data, object_data, tin_pose, tin_bbox) if a is not None)):
         array.resize((offset, *array.shape[1:]))
     store.create_dataset("meta/episode_ends", data=np.asarray(ends, dtype=np.int64))
     metadata.update(episodes=accepted, skipped=skipped, complete=True)
@@ -232,10 +256,31 @@ def same_preprocessing(a, b):
         and (a.get("objects") or {}).get("config") == (b.get("objects") or {}).get("config")
 
 
+def tin_yaw(quaternion):
+    """Yaw (rad) of a w x y z quaternion."""
+    w, x, y, z = np.moveaxis(np.asarray(quaternion, np.float64), -1, 0)
+    return np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+
+
+DATA_OPTIONS = ("gripper_command", "object_targets", "ground_truth_objects")
+
+
 class MeanFlowDataset(torch.utils.data.Dataset):
-    def __init__(self, path, horizon, n_obs_steps, split="train"):
+    def __init__(self, path, horizon, n_obs_steps, split="train", *, gripper_command=False, object_targets=False,
+                 ground_truth_objects=False):
         """`path`: one zarr, or a list of zarrs converted the same way (e.g. batches of simulated demos), read as
-        one dataset: episodes, splits and statistics span all of them."""
+        one dataset: episodes, splits and statistics span all of them.
+
+        gripper_command: add obs["gripper_command"] [T, 2], 1 where the gripper command sent at the PREVIOUS tick
+        was closed (< 30 mm). Unlike the measured opening (which lags the command by ~0.4 s, hence copycat), this is
+        known the moment the policy decides to close, and tells it that the grasp has started.
+
+        Episodes with simulated ground truth (data/tin_pose):
+          object_targets: add object_target [9] (the tin centre now, and tin - TCP for each arm, metres) and
+          object_target_valid, for an auxiliary loss; zeros / False for episodes without ground truth.
+          ground_truth_objects: the static scene's tin comes from the true start pose instead of the image
+          estimate (which can lock onto a greenish stain in simulated views); the pad stays estimated.
+        Every dataset mixed into one run must use the same options (one batch layout)."""
         paths = [path] if isinstance(path, (str, Path)) else list(path)
         self.roots = [zarr.open_group(str(p), mode="r") for p in paths]
         metas = [dict(r.attrs) for r in self.roots]
@@ -263,9 +308,36 @@ class MeanFlowDataset(torch.utils.data.Dataset):
         self.cumulative = np.cumsum([b - a for a, b in self.ranges])
         self.phase_flags = [grasp_phase_flags(self._root(i)["data/action"][a:b], self.metadata["fps"])
                             for i, (a, b) in enumerate(self.ranges)]
+        self.gripper_command, self.object_targets = gripper_command, object_targets
+        if (object_targets or ground_truth_objects) and not self.has_objects:
+            raise ValueError("object_targets / ground_truth_objects need a dataset converted with --object-features")
+        self.objects_override, self.targets = {}, {}
+        if object_targets or ground_truth_objects:
+            from openarm_flow.object_features import ObjectConfig, ObjectFeatures
+            features = ObjectFeatures(ObjectConfig.from_metadata(self.metadata["objects"]["config"]))
+            for i, (a, b) in enumerate(self.ranges):
+                root = self._root(i)
+                if "data/tin_pose" not in root or not np.isfinite(root["data/tin_pose"][a]).all():
+                    continue
+                pose, state = root["data/tin_pose"][a:b], root["data/state"][a:b]
+                if object_targets:
+                    tcp = features.tcp(state)                                    # [T, 2 arms, 3]
+                    self.targets[i] = np.concatenate([pose[:, :3], (pose[:, None, :3] - tcp).reshape(-1, 6)],
+                                                     1).astype(np.float32)
+                estimate = root["data/objects"][a]
+                if ground_truth_objects and estimate[0] > 0:                     # keep failed scenes failed
+                    pad = (estimate[6], estimate[7], np.arctan2(estimate[9], estimate[8]) / 2)
+                    tin = (pose[0, 0], pose[0, 1], tin_yaw(pose[0, 3:7]) % np.pi, estimate[5])
+                    self.objects_override[i] = features({"tin": tin, "pad": pad}, state)
 
     def _root(self, episode):
         return self.roots[self.sources[episode]]
+
+    def _objects(self, episode, rows):
+        """Object features of absolute zarr rows of one episode (ground-truth scene where requested)."""
+        if episode in self.objects_override:
+            return self.objects_override[episode][np.asarray(rows) - self.ranges[episode][0]]
+        return self._root(episode)["data/objects"].oindex[np.asarray(rows)]
 
     def __len__(self):
         return int(self.cumulative[-1]) if len(self.cumulative) else 0
@@ -284,16 +356,28 @@ class MeanFlowDataset(torch.utils.data.Dataset):
         local_ids = np.minimum(ids, end - 1) - start
         approach, phase = self.phase_flags[ep]
         valid = ids < end
+        state = root["data/state"].oindex[obs_ids]
         obs = {"depth": torch.from_numpy(encode_depth(root["data/depth"].oindex[obs_ids], self.cfg)),
-               "agent_pos": torch.from_numpy(root["data/state"].oindex[obs_ids])}
+               "agent_pos": torch.from_numpy(state)}
         if self.has_rgb:
             obs["rgb"] = torch.from_numpy(root["data/rgb"].oindex[obs_ids])  # uint8 [T,2,3,H,W]
         if self.has_objects:
-            obs["objects"] = torch.from_numpy(root["data/objects"].oindex[obs_ids])  # [T,F]
-        return {"obs": obs,
+            obs["objects"] = torch.from_numpy(self._objects(ep, obs_ids))  # [T,F]
+        if self.gripper_command:
+            # Command sent at the previous tick; before the first one the gripper is where it starts.
+            previous = root["data/action"].oindex[np.maximum(obs_ids - 1, start)][:, [7, 15]]
+            previous = np.where((obs_ids == start)[:, None], state[:, [7, 15]], previous)
+            obs["gripper_command"] = torch.from_numpy((previous < .03).astype(np.float32))
+        item = {"obs": obs,
                 "action": torch.from_numpy(actions), "action_valid": torch.from_numpy(valid),
                 "action_approach": torch.from_numpy(approach[local_ids] & valid[:, None]),
                 "action_phase": torch.from_numpy(phase[local_ids] & valid[:, None])}
+        if self.object_targets:
+            target = self.targets.get(ep)
+            item["object_target"] = torch.from_numpy(target[now - start] if target is not None
+                                                     else np.zeros(9, np.float32))
+            item["object_target_valid"] = torch.tensor(target is not None)
+        return item
 
     def statistics(self, delta_actions=True):
         """State z-score and future residual scales, using ONLY unpadded train targets."""
@@ -325,7 +409,7 @@ class MeanFlowDataset(torch.utils.data.Dataset):
             result[key + "_mean"] = mean.astype("f4")
             result[key + "_scale"] = np.maximum(std, floor).astype("f4")
         if self.has_objects:
-            values = np.concatenate([self._root(i)["data/objects"][a:b]
+            values = np.concatenate([self._objects(i, np.arange(a, b))
                                      for i, (a, b) in enumerate(self.ranges)]).astype(np.float64)
             mean, std = values.mean(0), values.std(0)
             mean[0], std[0] = 0.0, 1.0            # "valid" flag stays 0/1 so a missing scene is visible

@@ -145,17 +145,39 @@ class SceneEstimator:
             xy = np.mean([p[:2] for p in pads], 0)
             yaw = np.angle(np.mean([np.exp(2j * p[2]) for p in pads])) / 2   # rectangle yaw is 90/180 deg ambiguous
             pad = (float(xy[0]), float(xy[1]), float(yaw))
-        coarse = None
-        for name in sorted(masks, key=lambda n: n != "front"):       # front view first: most reliable centroid
+        # Tin candidates: the largest green blobs of each view (front first: most reliable centroid). Greenish stains
+        # on the box can outgrow the tin's rim (seen in simulated views with strong colour gains), so every separate
+        # object is fitted and the best joint silhouette overlap wins. Blobs within 10 cm of a candidate are the same
+        # object: starting the fit from them as well gives higher overlap but positions ~7 mm farther from the
+        # depth-measured poses (41 of 88 recorded episodes).
+        candidates = []
+        for name in sorted(masks, key=lambda n: n != "front"):
             g = cv2.morphologyEx(masks[name][0].astype(np.uint8), cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
             n, lab, st, cent = cv2.connectedComponentsWithStats(g)
-            if n > 1:
-                i = 1 + np.argmax(st[1:, cv2.CC_STAT_AREA])
-                if st[i, cv2.CC_STAT_AREA] >= 80:
-                    coarse = _ray_plane(cfg.cameras[name], *cent[i], top + cfg.tin_size_m[2])
+            for i in 1 + np.argsort(-st[1:, cv2.CC_STAT_AREA])[:3]:
+                if st[i, cv2.CC_STAT_AREA] < 80:
                     break
-        if coarse is None:
+                xy = _ray_plane(cfg.cameras[name], *cent[i], top + cfg.tin_size_m[2])
+                if all(np.hypot(*(xy - c)) > 0.10 for c in candidates):   # one per object (tin: 88 mm)
+                    candidates.append(xy)
+        if not candidates:
             return {"tin": None, "pad": pad}
+        best = max((self._coarse_fit(masks, xy) for xy in candidates), key=lambda t: t[0][0])
+        best, score = best
+        for step, astep in ((0.005, np.radians(5)), (0.002, np.radians(2))):
+            for _ in range(3):
+                x0, y0, a0 = best[1]
+                for dx in (-step, 0, step):
+                    for dy in (-step, 0, step):
+                        for da in (-astep, 0, astep):
+                            v = score(x0 + dx, y0 + dy, a0 + da)
+                            if v > best[0]:
+                                best = (v, (x0 + dx, y0 + dy, a0 + da))
+        x, y, yaw = best[1]
+        return {"tin": (float(x), float(y), float(yaw % np.pi), float(best[0])), "pad": pad}
+
+    def _coarse_fit(self, masks, coarse):
+        """Grid search (+-4 cm, 15 deg) around one candidate -> ((score, (x, y, yaw)), score function)."""
         target = {}
         for name, (g, w) in masks.items():
             near = self._silhouette(name, *coarse, 0.0) | self._silhouette(name, *coarse, np.pi / 2)
@@ -172,17 +194,7 @@ class SceneEstimator:
         best = max(((score(x, y, a), (x, y, a)) for x in coarse[0] + np.linspace(-0.04, 0.04, 9)
                     for y in coarse[1] + np.linspace(-0.04, 0.04, 9) for a in np.radians(np.arange(0, 180, 15))),
                    key=lambda t: t[0])
-        for step, astep in ((0.005, np.radians(5)), (0.002, np.radians(2))):
-            for _ in range(3):
-                x0, y0, a0 = best[1]
-                for dx in (-step, 0, step):
-                    for dy in (-step, 0, step):
-                        for da in (-astep, 0, astep):
-                            v = score(x0 + dx, y0 + dy, a0 + da)
-                            if v > best[0]:
-                                best = (v, (x0 + dx, y0 + dy, a0 + da))
-        x, y, yaw = best[1]
-        return {"tin": (float(x), float(y), float(yaw % np.pi), float(best[0])), "pad": pad}
+        return best, score
 
 
 class ObjectFeatures:

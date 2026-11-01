@@ -121,6 +121,33 @@ def test_several_zarrs_read_as_one_dataset(converted, tmp_path):
         MeanFlowDataset([path, tmp_path / "small.zarr"], 4, 2)
 
 
+def test_simulated_ground_truth_is_kept_per_frame(tmp_path):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    episode(raw / "real.hdf5")
+    episode(raw / "sim.hdf5", 100)
+    with h5py.File(raw / "sim.hdf5", "a") as f:
+        f.create_dataset("observations/object_pose/mentos_tin", data=np.arange(6 * 7, dtype="f4").reshape(6, 7))
+        for k, c in enumerate(("chest", "front")):
+            f.create_dataset(f"observations/object_bbox/{c}", data=np.full((6, 5), 10 * k, "i4") + np.arange(6)[:, None])
+    out = tmp_path / "gt.zarr"
+    meta = convert_depth(raw, out, DepthConfig(height=16, width=16), action_source="next_qpos", all_train=True)
+    import zarr
+    root = zarr.open_group(str(out), mode="r")
+    sim = [e["id"] for e in meta["episodes"]].index("sim")
+    real = 1 - sim
+    rows = slice(5 * sim, 5 * sim + 5)   # next_qpos drops the last frame
+    np.testing.assert_array_equal(root["data/tin_pose"][rows], np.arange(5 * 7).reshape(5, 7))
+    np.testing.assert_array_equal(root["data/tin_bbox"][rows][:, 1, 0], 10 + np.arange(5))
+    assert np.isnan(root["data/tin_pose"][5 * real:5 * real + 5]).all()
+    assert (root["data/tin_bbox"][5 * real:5 * real + 5] == -1).all()
+    assert meta["ground_truth"]["tin_bbox_cameras"] == ["chest", "front"]
+    assert "ground_truth" not in meta["episodes"][real]
+    plain = convert_depth(raw, tmp_path / "plain.zarr", DepthConfig(height=16, width=16), action_source="next_qpos",
+                          all_train=True, episode_names=["real.hdf5"])
+    assert "ground_truth" not in plain and "data/tin_pose" not in zarr.open_group(str(tmp_path / "plain.zarr"), "r")
+
+
 def test_corrupt_episode_is_explicitly_reported(tmp_path):
     raw = tmp_path / "raw"
     raw.mkdir()

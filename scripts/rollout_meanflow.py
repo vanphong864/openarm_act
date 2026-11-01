@@ -192,7 +192,7 @@ def main():
                         sensed[col] = 0.043
             elif args.gripper_sensor == "always-open":   # diagnosis: hide the gripper's own motion from the policy
                 sensed[[7, 15]] = 0.043
-            policy.observe({"images": images, "state": sensed})
+            policy.observe({"images": images, "state": sensed, "command": last_command})
             if step < handover:
                 if args.shadow:
                     if step >= len(commands):
@@ -227,11 +227,17 @@ def main():
         local = (final - pad_center) @ pad_rot
         in_pad = bool(abs(local[0]) <= pad_half[0] and abs(local[1]) <= pad_half[1] and final[2] < box_top + 0.05)
         states, actions = np.asarray(states), np.asarray(actions)
+        # What the policy believes about the tin (estimated once from the first simulated frame) vs where it is.
+        seen = getattr(policy, "scene", None) or getattr(getattr(policy, "arm", None), "scene", None) or {}
+        seen_tin = seen.get("tin")
         active = slice(0, 7) if recorded_arm == "left" else slice(8, 15)
         grip = 7 if recorded_arm == "left" else 15
         row = {"episode": episode, "recorded_arm": recorded_arm, "steps": len(states), "handover_step": handover,
                "lifted": max_lift > 0.03, "max_lift_m": max_lift, "in_pad": in_pad,
                "tin_end_xy": final[:2].round(4).tolist(),
+               "tin_start_xy": np.round(tin_xy, 4).tolist(),
+               "policy_scene_tin_error_mm": (None if seen_tin is None else
+                                             round(float(np.hypot(*(np.subtract(seen_tin[:2], tin_xy)))) * 1000, 1)),
                "background_color_gain": gains,
                "min_active_gripper_mm": float(states[:, grip].min() * 1000),
                "active_arm_joint_range_rad": float(np.ptp(states[:, active], axis=0).max()),

@@ -26,8 +26,9 @@ def main():
     args = ap.parse_args()
     torch.set_num_threads(4)
     adapter = OpenArmMeanFlowPolicy(args.checkpoint, args.device)
-    data = MeanFlowDataset(args.dataset, adapter.policy.horizon, adapter.state_steps, "val")
-    expected = {k: v for k, v in adapter.metadata.items() if k not in ("policy_type", "step")}
+    data = MeanFlowDataset(args.dataset, adapter.policy.horizon, adapter.state_steps, "val",
+                           **adapter.metadata.get("data_options", {}))
+    expected = {k: v for k, v in adapter.metadata.items() if k not in ("policy_type", "step", "data_options")}
     if data.metadata != expected:
         raise ValueError("Dataset metadata differs from the trained release")
     loader = DataLoader(Subset(data, data.validation_indices(args.samples_per_episode)), batch_size=args.batch_size)

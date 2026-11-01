@@ -12,14 +12,17 @@ from openarm_flow.meanflow import MeanFlowPolicy
 from openarm_flow.rgb_views import RGBConfig, resize_rgb
 
 
-def save_meanflow_release(directory, model, config, metadata, step):
+def save_meanflow_release(directory, model, config, metadata, step, data_options=None):
+    """data_options: the MeanFlowDataset options the model was trained with (evaluation reads data the same way)."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), directory / "model.pt.tmp")
     (directory / "model.pt.tmp").replace(directory / "model.pt")
     (directory / "config.json").write_text(json.dumps(config, indent=2))
     kind = "meanflow_depth_v2" if model.separate_gripper else "meanflow_depth"
-    (directory / "metadata.json").write_text(json.dumps({**metadata, "policy_type": kind, "step": step}, indent=2))
+    extra = {"data_options": data_options} if data_options else {}
+    (directory / "metadata.json").write_text(json.dumps({**metadata, "policy_type": kind, "step": step, **extra},
+                                                        indent=2))
 
 
 class GripperCloseConfirmer:
@@ -90,7 +93,8 @@ class OpenArmMeanFlowPolicy:
 
     def _keys(self):
         return ("depth", "agent_pos", *(("rgb",) if self.rgb_config else ()),
-                *(("objects",) if self.object_features is not None else ()))
+                *(("objects",) if self.object_features is not None else ()),
+                *(("gripper_command",) if self.policy.gripper_command_input else ()))
 
     def reset(self):
         self.history = deque(maxlen=self.state_steps)
@@ -101,7 +105,11 @@ class OpenArmMeanFlowPolicy:
         self.generator = torch.Generator(device=self.device).manual_seed(self.seed)
 
     def observe(self, obs):
-        """Call every 50 Hz tick, including while executing the queued action chunk."""
+        """Call every 50 Hz tick, including while executing the queued action chunk.
+
+        obs: {"images": {...}, "state": qpos [16], "command": the 16 joint commands sent at the previous tick
+        (before the first one: the start qpos)}; "command" is required by releases trained with
+        gripper_command_input."""
         state = np.asarray(obs["state"], dtype=np.float32)
         if state.shape != (16,) or not np.isfinite(state).all():
             raise ValueError("Expected finite qpos [16]")
@@ -112,6 +120,13 @@ class OpenArmMeanFlowPolicy:
                 raise ValueError(f"{camera}: resolution differs from recording")
             frames.append(resize_depth(raw, self.depth_config, camera))
         item = {"depth": encode_depth(np.stack(frames), self.depth_config), "agent_pos": state.copy()}
+        if self.policy.gripper_command_input:
+            if obs.get("command") is None:
+                raise ValueError("This release needs obs['command']: the joint commands sent at the previous tick")
+            command = np.asarray(obs["command"], dtype=np.float32)
+            if command.shape != (16,):
+                raise ValueError("Expected command [16]")
+            item["gripper_command"] = (command[[7, 15]] < .03).astype(np.float32)
         if self.object_features is not None:
             if self.scene is None:
                 self.scene = self.estimator.estimate({c: np.asarray(obs["images"][f"{c}_rgb"])

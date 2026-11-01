@@ -71,7 +71,8 @@ def main():
                     p.scene = scene
                 for j in range(k - adapter.state_steps + 1, k + 1):
                     i = int(labels.indices[j])
-                    adapter.observe({"images": {c: images[c][i] for c in cameras}, "state": labels.state[j]})
+                    adapter.observe({"images": {c: images[c][i] for c in cameras}, "state": labels.state[j],
+                                     "command": labels.actions[j - 1] if j else labels.state[0]})
                 chunk = adapter.infer()["actions"]
                 target = labels.actions[k:k + adapter.chunk_size]
                 hold = np.repeat(labels.state[k][None], adapter.chunk_size, 0)

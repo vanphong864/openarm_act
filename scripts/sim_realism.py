@@ -155,7 +155,8 @@ def main():
                         mask = pastes[name][which][..., None]
                         sources[variant][f"{name}_rgb"] = np.where(mask, simulated[f"{name}_rgb"], real[f"{name}_rgb"])
                 for name, policy in policies.items():
-                    policy.observe({"images": {k: sources[name][k] for k in image_keys}, "state": labels.state[j]})
+                    policy.observe({"images": {k: sources[name][k] for k in image_keys}, "state": labels.state[j],
+                                    "command": labels.actions[j - 1] if j else labels.state[0]})
                 if j < policies["real"].state_steps - 1 or j % args.stride:
                     continue
                 chunks = {name: policy.infer()["actions"] for name, policy in policies.items()}

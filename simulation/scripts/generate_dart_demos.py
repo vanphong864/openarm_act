@@ -10,6 +10,13 @@ policy to recover from its own drift in closed loop (Laskey et al., DART, 2017).
 in the pad are kept. Images are the same composite cameras used for rollouts (sim robot/tin over the real
 background); validation episodes of the given release are never used as setups.
 
+Ground truth recorded with each frame (not available on the real robot; for auxiliary losses or detector labels):
+  observations/object_pose/mentos_tin   [T, 7] x y z qw qx qy qz of the tin in the sim world frame (the camera
+                                        calibration frame);
+  observations/object_bbox/<camera>     [T, 5] x0 y0 x1 y1 (inclusive, source pixels) and visible pixel count of
+                                        the tin in that camera's image (all -1 / 0 when not visible);
+and the pad's pose in the file attributes (sim_pad_pose, sim_pad_half_size).
+
   generate_dart_demos.py --raw "/media/space/New Volume/dataset/2026-10-13" \
       --exclude-val-of releases/meanflow_v2_run3/best_release --demos 30 \
       --out "/media/space/New Volume/sim_demos/2026-10-13_dart"
@@ -39,6 +46,12 @@ from openarm_sim.scene import PAD_GEOM  # noqa: E402
 from replay_real_20261013 import load_cfg, set_object  # noqa: E402
 
 HOLD_BEFORE, HOLD_AFTER = 25, 25   # control ticks of standing still before/after the expert plan
+
+
+def pad_quat(xmat):
+    quat = np.zeros(4)
+    mujoco.mju_mat2Quat(quat, np.asarray(xmat, np.float64).reshape(9))
+    return quat
 
 
 def main():
@@ -83,6 +96,7 @@ def main():
     tin_body = m.body("mentos_tin").id
     tin_geom = m.geom("mentos_tin_geom").id
     tin_half = m.geom_size[tin_geom].copy()
+    tin_geoms = np.flatnonzero(m.geom_bodyid == tin_body)   # box + top label
     box_top = cfg["_measured"]["cameras"]["box_top_height_m"]
     pad = m.geom(PAD_GEOM).id
     box_xy0 = m.body_pos[m.geom_bodyid[pad]][:2].copy()
@@ -154,7 +168,8 @@ def main():
         partial = args.out / f"{args.prefix}_in_progress.partial.hdf5"
         f = h5py.File(partial, "w")
         images = {}
-        qpos_log, command_log = [], []
+        qpos_log, command_log, pose_log = [], [], []
+        bbox_log = {name: [] for name in cameras}
         lifted = False
         total = HOLD_BEFORE + expert.n_steps + HOLD_AFTER
         try:
@@ -172,6 +187,10 @@ def main():
                                                            dtype=frame.dtype, chunks=(1, *frame.shape), compression="lzf")
                         images[key].resize(len(qpos_log) + 1, axis=0)
                         images[key][len(qpos_log)] = frame
+                    ys, xs = np.nonzero(np.isin(camera.last_segmentation, tin_geoms))
+                    bbox_log[name].append([xs.min(), ys.min(), xs.max(), ys.max(), len(xs)] if len(xs)
+                                          else [-1, -1, -1, -1, 0])
+                pose_log.append(np.r_[sim.d.xpos[tin_body], sim.d.xquat[tin_body]].astype(np.float32))
                 qpos_log.append(sim.qpos16().astype(np.float32))
                 command_log.append(label.astype(np.float32))
                 executed = label.copy()
@@ -202,12 +221,17 @@ def main():
                 f.attrs.update(sim=True, complete=True, samples=n, duration_seconds=n / fps, frequency_hz=float(fps),
                                created_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                                sim_setup_episode=setup, sim_noise_std_rad=float(sigma),
-                               sim_generator="simulation/scripts/generate_dart_demos.py")
+                               sim_generator="simulation/scripts/generate_dart_demos.py",
+                               sim_tin_half_size=tin_half.tolist(), sim_pad_half_size=m.geom_size[pad].tolist(),
+                               sim_pad_pose=np.r_[sim.d.geom_xpos[pad], pad_quat(sim.d.geom_xmat[pad])].tolist())
                 qpos = np.stack(qpos_log)
                 f.create_dataset("observations/qpos", data=qpos)
                 f.create_dataset("action", data=qpos)            # the recorder's `action` is the measured qpos
                 f.create_dataset("joint_commands", data=np.stack(command_log))
                 f.create_dataset("timestamp_ns", data=np.arange(n, dtype=np.int64) * int(1e9 / fps))
+                f.create_dataset("observations/object_pose/mentos_tin", data=np.stack(pose_log))
+                for name, boxes in bbox_log.items():
+                    f.create_dataset(f"observations/object_bbox/{name}", data=np.asarray(boxes, np.int32))
         finally:
             f.close()
         if not (lifted and in_pad):

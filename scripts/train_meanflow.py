@@ -24,6 +24,15 @@ def to_device(batch, device):
     return {k: to_device(v, device) for k, v in batch.items()} if isinstance(batch, dict) else batch.to(device)
 
 
+def data_options(model_config, train_config):
+    """MeanFlowDataset options implied by the model/train config; only the ones switched on (old runs: {})."""
+    options = {"gripper_command": bool(model_config.get("gripper_command_input")),
+               "object_targets": bool(model_config.get("object_aux_weight")),
+               # only meaningful for a model that sees object features
+               "ground_truth_objects": bool(train_config.get("ground_truth_objects") and model_config.get("object_features"))}
+    return {k: v for k, v in options.items() if v}
+
+
 @torch.no_grad()
 def validate(model, loader, device, seed):
     model.eval()
@@ -32,6 +41,7 @@ def validate(model, loader, device, seed):
     tcp_squares, tcp_angle_squares, tcp_count = 0.0, 0.0, 0
     approach_squares, approach_angle_squares, approach_grip_sum, approach_count = 0.0, 0.0, 0.0, 0
     approach_distances = []
+    tin_squares, tcp_tin_squares, object_count = 0.0, 0.0, 0
     arms = [i for i in range(16) if i not in (7, 15)]
     cuda_devices = list(range(torch.cuda.device_count())) if str(device).startswith("cuda") else []
     with torch.random.fork_rng(devices=cuda_devices):
@@ -65,6 +75,12 @@ def validate(model, loader, device, seed):
                     approach_grip_sum += float((prediction - target)[..., [7, 15]].abs()[approach].sum())
                     approach_count += int(approach.sum())
                     approach_distances.append(distance2[approach].sqrt().cpu())
+            if model.object_head is not None and batch["object_target_valid"].any():
+                valid_objects = batch["object_target_valid"]
+                error = (model.predict_object(batch["obs"]) - batch["object_target"])[valid_objects]
+                tin_squares += float(error[:, :3].square().sum())
+                tcp_tin_squares += float(error[:, 3:].square().sum())
+                object_count += int(valid_objects.sum())
             sums["loss"] += float(loss) * len(target)
             count += len(target)
             frames += int(mask.sum())
@@ -89,6 +105,9 @@ def validate(model, loader, device, seed):
         metrics["val_selection_uses_approach"] = bool(approach_count)
         metrics["val_selection_score"] = (position_rmse / model.tcp_position_scale_m
                                            + .1 * angle_rmse / model.tcp_orientation_scale_rad + .25 * grip_mm / 5)
+    if object_count:   # auxiliary head: reported, not used to choose the checkpoint
+        metrics.update(val_tin_position_rmse_mm=math.sqrt(tin_squares / object_count) * 1000,
+                       val_tcp_to_tin_rmse_mm=math.sqrt(tcp_tin_squares / (2 * object_count)) * 1000)
     if not all(x is None or math.isfinite(x) for x in metrics.values()):
         raise ValueError("Nonfinite validation metrics")
     return metrics
@@ -125,11 +144,15 @@ def main():
     device = "cuda" if args.device == "auto" and torch.cuda.is_available() else ("cpu" if args.device == "auto" else args.device)
     torch.set_num_threads(4)
     torch.manual_seed(cfg["seed"])
-    train = MeanFlowDataset(args.dataset, mc["horizon"], mc["n_obs_steps"])
-    val = MeanFlowDataset(args.dataset, mc["horizon"], mc["n_obs_steps"], "val")
+    options = data_options(mc, tr)
+    train = MeanFlowDataset(args.dataset, mc["horizon"], mc["n_obs_steps"], **options)
+    val = MeanFlowDataset(args.dataset, mc["horizon"], mc["n_obs_steps"], "val", **options)
     if not len(train) or not len(val):
         raise ValueError("Both train and validation episodes are required")
-    extras = [MeanFlowDataset(p, mc["horizon"], mc["n_obs_steps"]) for p in args.extra_dataset]
+    extras = [MeanFlowDataset(p, mc["horizon"], mc["n_obs_steps"], **options) for p in args.extra_dataset]
+    if mc.get("object_aux_weight") and not (train.targets or any(e.targets for e in extras)):
+        raise ValueError("model.object_aux_weight > 0 but no training episode has simulated ground truth "
+                         "(data/tin_pose)")
     for path, extra in zip(args.extra_dataset, extras):
         if not same_preprocessing(extra.metadata, train.metadata):
             raise ValueError(f"{path}: preprocessing differs from the main dataset "
@@ -226,11 +249,11 @@ def main():
             with (args.output / "metrics.jsonl").open("a") as f:
                 f.write(json.dumps(metrics) + "\n")
             print(json.dumps(metrics), flush=True)
-            save_meanflow_release(args.output / "release", ema, mc, train.metadata, step)
+            save_meanflow_release(args.output / "release", ema, mc, train.metadata, step, options)
             selection_metric = "val_selection_score" if "val_selection_score" in metrics else "val_normalized_mse"
             if metrics[selection_metric] < best:
                 best = metrics[selection_metric]
-                save_meanflow_release(args.output / "best_release", ema, mc, train.metadata, step)
+                save_meanflow_release(args.output / "best_release", ema, mc, train.metadata, step, options)
                 (args.output / "best_metrics.json").write_text(json.dumps(metrics, indent=2))
             checkpoint = {"step": step, "model_config": mc, "train_config": tr, "seed": cfg["seed"],
                           "metadata": train.metadata, "extra_datasets": extra_metadata,

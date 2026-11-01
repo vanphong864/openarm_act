@@ -206,7 +206,8 @@ class MeanFlowPolicy(nn.Module):
                  rgb_color_jitter=0.2, spatial_softmax=False, keypoints=32, rgb_channel_gain_jitter=0.0,
                  state_noise_std=0.0, state_history_dropout=0.0, rgb_backbone="cnn", pretrained_backbone=True,
                  freeze_backbone_stem=False, random_shift_px=0, rgb_cutout_prob=0.0, rgb_blur_prob=0.0,
-                 object_features=False, object_dropout=0.0, object_noise_m=0.0, gripper_state_input=True):
+                 object_features=False, object_dropout=0.0, object_noise_m=0.0, gripper_state_input=True,
+                 gripper_command_input=False, object_aux_weight=0.0, object_aux_scale_m=0.03):
         super().__init__()
         if (not down_dims or any(d < 8 or d % 8 for d in down_dims)
                 or min(horizon, n_obs_steps, n_action_steps) < 1
@@ -236,6 +237,14 @@ class MeanFlowPolicy(nn.Module):
             raise ValueError("Invalid object feature augmentation")
         self.object_features, self.object_dropout, self.object_noise_m = object_features, object_dropout, object_noise_m
         self.gripper_state_input = gripper_state_input
+        if gripper_command_input and gripper_state_input:
+            raise ValueError("gripper_command_input takes the place of the measured opening: set gripper_state_input false")
+        if object_aux_weight < 0 or object_aux_scale_m <= 0:
+            raise ValueError("Invalid object auxiliary loss weight/scale")
+        if object_aux_weight and not object_features:
+            raise ValueError("The object auxiliary loss needs object_features (its targets come from that config)")
+        self.gripper_command_input = gripper_command_input
+        self.object_aux_weight, self.object_aux_scale_m = object_aux_weight, object_aux_scale_m
         self.action_loss_weight, self.tcp_position_weight = action_loss_weight, tcp_position_weight
         self.tcp_orientation_weight, self.gripper_loss_weight = tcp_orientation_weight, gripper_loss_weight
         self.phase_weight = phase_weight
@@ -251,6 +260,10 @@ class MeanFlowPolicy(nn.Module):
         if separate_gripper:
             self.gripper_head = nn.Sequential(nn.Linear(condition_dim, 128), nn.SiLU(), nn.Linear(128, horizon * 2))
             nn.init.constant_(self.gripper_head[-1].bias, 2.0)
+        # Auxiliary only (not used to act): where the tin is now and relative to each TCP, from the same condition
+        # the actions come from, so the encoder must keep tracking the tin once it moves (pushed, grasped, lifted).
+        self.object_head = (nn.Sequential(nn.Linear(condition_dim, 128), nn.SiLU(), nn.Linear(128, 9))
+                            if object_aux_weight else None)
         self.kinematics = None
         if tcp_position_weight or tcp_orientation_weight:
             from openarm_flow.kinematics import OpenArmKinematics
@@ -377,6 +390,13 @@ class MeanFlowPolicy(nn.Module):
             # The measured opening lags the close command by ~0.4 s; a policy that sees it learns to close only once
             # the fingers are already closing (copycat), which never starts in closed loop. Hide it, always.
             normalized = normalized.index_fill(-1, self.gripper_indices, 0.0)
+        if self.gripper_command_input:
+            # In the freed gripper slots: +1 where the command sent at the previous tick was closed, else -1. Known
+            # the moment the policy decides to close, so it can tell "grasping/holding" from "approaching".
+            if "gripper_command" not in obs:
+                raise ValueError("Model uses the gripper command but the observation has no 'gripper_command' [B,T,2]")
+            normalized = normalized.index_copy(-1, self.gripper_indices,
+                                               2 * obs["gripper_command"].to(normalized.dtype) - 1)
         return self.encoder(depth, normalized, rgb, objects)
 
     def _prepare_rgb(self, obs, augment):
@@ -501,7 +521,22 @@ class MeanFlowPolicy(nn.Module):
                 orientation_loss = self._weighted_mean(rot_error, arm_weight)
                 loss = loss + self.tcp_position_weight * position_loss + self.tcp_orientation_weight * orientation_loss
                 parts.update(tcp_position_loss=float(position_loss.detach()), tcp_orientation_loss=float(orientation_loss.detach()))
+        if self.object_head is not None:
+            if "object_target" not in batch:
+                raise ValueError("Model has an object auxiliary loss but the batch has no 'object_target'")
+            error = F.smooth_l1_loss(self.object_head(cond), batch["object_target"].to(cond.dtype) / self.object_aux_scale_m,
+                                     reduction="none").mean(-1)
+            object_loss = self._weighted_mean(error, batch["object_target_valid"].to(error.dtype))
+            loss = loss + self.object_aux_weight * object_loss
+            parts["object_aux_loss"] = float(object_loss.detach())
         return loss, parts
+
+    @torch.no_grad()
+    def predict_object(self, obs):
+        """Auxiliary head output in metres: [B, 9] = tin centre, tin - left TCP, tin - right TCP."""
+        if self.object_head is None:
+            raise ValueError("Model has no object head")
+        return self.object_head(self.encode(obs)) * self.object_aux_scale_m
 
     @torch.no_grad()
     def predict_action(self, obs, *, noise=None, generator=None):
