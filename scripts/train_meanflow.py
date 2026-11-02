@@ -27,6 +27,8 @@ def to_device(batch, device):
 def data_options(model_config, train_config):
     """MeanFlowDataset options implied by the model/train config; only the ones switched on (old runs: {})."""
     options = {"gripper_command": bool(model_config.get("gripper_command_input")),
+               "holding": bool(model_config.get("holding_input")),
+               "release_phase": bool(train_config.get("release_phase")),
                "object_targets": bool(model_config.get("object_aux_weight")),
                # only meaningful for a model that sees object features
                "ground_truth_objects": bool(train_config.get("ground_truth_objects") and model_config.get("object_features"))}

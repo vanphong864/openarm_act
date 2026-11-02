@@ -11,7 +11,7 @@ pytest.importorskip("zarr")
 from test_meanflow import model_config
 from openarm_flow.depth_views import DepthConfig
 from openarm_flow.meanflow import MeanFlowPolicy
-from openarm_flow.meanflow_data import MeanFlowDataset, convert_depth
+from openarm_flow.meanflow_data import HoldingDetector, MeanFlowDataset, convert_depth, grasp_phase_flags, holding_flags
 from openarm_flow.meanflow_policy import OpenArmMeanFlowPolicy, save_meanflow_release
 from openarm_flow.object_features import FEATURE_DIM, ObjectConfig, ObjectFeatures, SceneEstimator, _project
 from openarm_flow.rgb_views import RGBConfig
@@ -223,3 +223,68 @@ def test_ground_truth_scene_object_targets_and_gripper_command(tmp_path):
     policy.observe({**obs, "command": np.full(16, 0.01, np.float32)})
     assert policy.history[-1]["gripper_command"].tolist() == [1, 1]
     assert policy.infer()["actions"].shape == (3, 16)
+
+
+def test_holding_detector_is_off_until_the_fingers_settle_on_something():
+    fps = 50
+    open_, closing, held = [0.043] * 20, list(np.linspace(0.043, 0.024, 10)), [0.024] * 30
+    released = list(np.linspace(0.024, 0.043, 10)) + [0.043] * 5
+    left = np.array(open_ + closing + held + released)
+    right = np.full(len(left), 0.002)                      # closed on air: never "holding"
+    states = np.zeros((len(left), 16))
+    states[:, 7], states[:, 15] = left, right
+    flags = holding_flags(states, fps)
+    assert not flags[:, 1].any()
+    assert not flags[:30, 0].any()                         # open and closing: the close decision never sees it
+    on = np.flatnonzero(flags[:, 0])
+    assert 30 + round(0.3 * fps) - 4 <= on[0] <= 30 + round(0.3 * fps) - 1   # once it has stayed put for 0.3 s
+    assert flags[on[0]:63, 0].all() and not flags[63:, 0].any()   # off once the opening leaves the range (> 30 mm)
+    detector = HoldingDetector(fps)                        # incremental use (deployment) gives the same flags
+    np.testing.assert_array_equal(np.stack([detector(s[[7, 15]]) for s in states]), flags)
+    actions = states.copy()
+    actions[30:60, 7] = 0.0                                # closed command, then released at 60
+    _, phase = grasp_phase_flags(actions, fps)
+    _, both = grasp_phase_flags(actions, fps, release=True)
+    assert not phase[61:, 0].any() and both[10:85, 0].all()
+
+
+def test_holding_input_dataset_model_and_policy(tmp_path):
+    cfg = config()
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    episode(raw / "a.hdf5", cfg)
+    episode(raw / "b.hdf5", cfg, 0.1)
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text("episodes:\n  b:\n    split: val\n")
+    meta = convert_depth(raw, tmp_path / "d.zarr", DepthConfig(height=16, width=16), manifest=manifest,
+                         action_source="next_qpos", rgb=RGBConfig(height=16, width=16), objects=cfg)
+    options = dict(holding=True, release_phase=True)
+    data = MeanFlowDataset(tmp_path / "d.zarr", 4, 2, **options)
+    assert data[3]["obs"]["holding"].shape == (2, 2)
+    model_cfg = {**model_config(), "use_rgb": True, "object_features": True, "gripper_state_input": False,
+                 "holding_input": True}
+    with pytest.raises(ValueError, match="holding_input"):
+        MeanFlowPolicy(**{**model_cfg, "gripper_command_input": True})
+    model = MeanFlowPolicy(**model_cfg)
+    model.set_statistics(data.statistics())
+    batch = next(iter(torch.utils.data.DataLoader(data, batch_size=4)))
+    loss, _ = model.compute_loss(batch)
+    assert torch.isfinite(loss)
+    model.eval()
+    flipped = {**batch["obs"], "holding": 1 - batch["obs"]["holding"]}
+    assert not torch.allclose(model.encode(batch["obs"]), model.encode(flipped))
+    with pytest.raises(ValueError, match="holding"):
+        model.encode({k: v for k, v in batch["obs"].items() if k != "holding"})
+    save_meanflow_release(tmp_path / "release", model, model_cfg, meta, 1, options)
+    policy = OpenArmMeanFlowPolicy(tmp_path / "release", "cpu")
+    with h5py.File(raw / "a.hdf5", "r") as f:
+        obs = {"images": {k: f[f"observations/images/{k}"][3] for k in (*policy.cameras, *policy.rgb_config.cameras)},
+               "state": f["observations/qpos"][3].copy()}
+    obs["state"][7] = 0.024
+    for _ in range(round(0.3 * 50)):
+        policy.observe(obs)
+    assert policy.history[-1]["holding"].tolist() == [1, 0]
+    assert policy.infer()["actions"].shape == (3, 16)
+    policy.reset()
+    policy.observe(obs)
+    assert policy.history[-1]["holding"].tolist() == [0, 0]

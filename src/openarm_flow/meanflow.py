@@ -207,7 +207,7 @@ class MeanFlowPolicy(nn.Module):
                  state_noise_std=0.0, state_history_dropout=0.0, rgb_backbone="cnn", pretrained_backbone=True,
                  freeze_backbone_stem=False, random_shift_px=0, rgb_cutout_prob=0.0, rgb_blur_prob=0.0,
                  object_features=False, object_dropout=0.0, object_noise_m=0.0, gripper_state_input=True,
-                 gripper_command_input=False, object_aux_weight=0.0, object_aux_scale_m=0.03):
+                 gripper_command_input=False, holding_input=False, object_aux_weight=0.0, object_aux_scale_m=0.03):
         super().__init__()
         if (not down_dims or any(d < 8 or d % 8 for d in down_dims)
                 or min(horizon, n_obs_steps, n_action_steps) < 1
@@ -239,11 +239,13 @@ class MeanFlowPolicy(nn.Module):
         self.gripper_state_input = gripper_state_input
         if gripper_command_input and gripper_state_input:
             raise ValueError("gripper_command_input takes the place of the measured opening: set gripper_state_input false")
+        if holding_input and (gripper_state_input or gripper_command_input):
+            raise ValueError("holding_input takes the gripper slots: set gripper_state_input and gripper_command_input false")
         if object_aux_weight < 0 or object_aux_scale_m <= 0:
             raise ValueError("Invalid object auxiliary loss weight/scale")
         if object_aux_weight and not object_features:
             raise ValueError("The object auxiliary loss needs object_features (its targets come from that config)")
-        self.gripper_command_input = gripper_command_input
+        self.gripper_command_input, self.holding_input = gripper_command_input, holding_input
         self.object_aux_weight, self.object_aux_scale_m = object_aux_weight, object_aux_scale_m
         self.action_loss_weight, self.tcp_position_weight = action_loss_weight, tcp_position_weight
         self.tcp_orientation_weight, self.gripper_loss_weight = tcp_orientation_weight, gripper_loss_weight
@@ -397,6 +399,12 @@ class MeanFlowPolicy(nn.Module):
                 raise ValueError("Model uses the gripper command but the observation has no 'gripper_command' [B,T,2]")
             normalized = normalized.index_copy(-1, self.gripper_indices,
                                                2 * obs["gripper_command"].to(normalized.dtype) - 1)
+        if self.holding_input:
+            # +1 while the fingers hold something (meanflow_data.HoldingDetector), else -1. Always -1 when the close
+            # has to be decided, so it cannot be copied into it (run10 copied the previous command and never closed).
+            if "holding" not in obs:
+                raise ValueError("Model uses the holding flag but the observation has no 'holding' [B,T,2]")
+            normalized = normalized.index_copy(-1, self.gripper_indices, 2 * obs["holding"].to(normalized.dtype) - 1)
         return self.encoder(depth, normalized, rgb, objects)
 
     def _prepare_rgb(self, obs, augment):

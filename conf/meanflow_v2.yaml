@@ -29,8 +29,9 @@ model:
   object_dropout: 0.15           # sometimes hide them (as when the scene estimate fails)
   object_noise_m: 0.01           # detector-like position noise
   gripper_state_input: false     # hide the measured opening: run5 only closed once it saw the fingers closing (copycat)
-  gripper_command_input: true    # run10: +-1 'previous command closed' in the gripper slots. run8 in sim often closed
-                                 # and reopened at once, and never lifted after closing: it could not tell it had closed
+  gripper_command_input: false   # run10 (+-1 'previous command closed'): copied it, almost never closed in sim (0/13)
+  holding_input: true            # run11: +-1 'fingers hold something' (meanflow_data.HoldingDetector) in the gripper
+                                 # slots; off whenever the close is decided, on while carrying to the pad
   object_aux_weight: 0.1         # run10: predict the tin now (and tin - TCP) from the condition; sim ground truth only
   object_aux_scale_m: 0.03
   pixel_dropout: 0.02
@@ -53,6 +54,8 @@ train:
   extra_fraction: 0.3   # share of each batch from --extra-dataset (simulated corrective demos), if given
   ground_truth_objects: true   # run10: simulated demos take the static tin pose from ground truth (the image estimate
                                # locked onto a greenish box stain in ~1 in 9 simulated demos); real data stays estimated
+  release_phase: true   # run11: phase_weight also on the 1 s before / 0.5 s after each release (holding is still 1
+                        # there: the release is decided from the images and the pad vector, not the flag)
   save_every: 500
   val_samples_per_episode: 192   # ~900 approach samples: checkpoint choice less driven by noise in the gripper term
   num_workers: 0

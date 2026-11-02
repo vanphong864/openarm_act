@@ -17,11 +17,12 @@ from openarm_flow.depth_views import DepthConfig, encode_depth, resize_depth
 from openarm_flow.rgb_views import RGBConfig, resize_rgb
 
 
-def grasp_phase_flags(actions, fps):
+def grasp_phase_flags(actions, fps, release=False):
     """Supervision-only masks: 1s before and .5s after an open->closed command.
 
     Episode-local, separately for each gripper. Starting an episode already
     closed is not evidence of a new closing event. Never provided to the encoder.
+    release: the phase mask (not `approach`) also covers 1s before and .5s after each closed->open command.
     """
     n = len(actions)
     approach, phase = np.zeros((n, 2), bool), np.zeros((n, 2), bool)
@@ -32,7 +33,49 @@ def grasp_phase_flags(actions, fps):
             start, stop = max(0, t - round(fps)), min(n, t + round(.5 * fps))
             approach[start:t, side] = True
             phase[start:stop, side] = True
+        if release:
+            for t in np.flatnonzero(closed[:-1] & ~closed[1:]) + 1:
+                phase[max(0, t - round(fps)):min(n, t + round(.5 * fps)), side] = True
     return approach, phase
+
+
+HOLD_OPENING_M = (0.018, 0.030)   # measured opening with the tin between the fingers: real 22.5-24.9 mm, sim 23.6-26.5
+HOLD_STILL_M = 0.003              # sim fingers wobble up to 2.5 mm per 0.3 s while carrying; real ones not at all
+HOLD_ON_S = 0.3
+
+
+class HoldingDetector:
+    """'The fingers hold something', from the measured opening alone: on once the opening has stayed inside
+    HOLD_OPENING_M, within HOLD_STILL_M, for HOLD_ON_S; off as soon as it leaves HOLD_OPENING_M.
+
+    It is off whenever the policy has to decide to close (fingers open, or still closing), so unlike the measured
+    opening (run5) or the previous command (run10) it cannot be copied into the close decision; and on while
+    carrying, so the policy can tell "carry to the pad" from "approach". Causal and incremental: the dataset and
+    the deployed policy run this same code, tick by tick."""
+
+    def __init__(self, fps):
+        self.window = round(HOLD_ON_S * fps)
+        self.reset()
+
+    def reset(self):
+        self.recent, self.flag = [], np.zeros(2, bool)
+
+    def __call__(self, opening):
+        """opening: measured [left, right] (m) at this tick -> flags [2] float32 (1 = holding)."""
+        opening = np.asarray(opening, np.float64)
+        self.recent = (self.recent + [opening])[-self.window:]
+        recent = np.stack(self.recent)
+        lo, hi = HOLD_OPENING_M
+        settled = (len(recent) == self.window) & ((recent >= lo) & (recent <= hi)).all(0) \
+            & (np.ptp(recent, 0) <= HOLD_STILL_M)
+        self.flag = (opening >= lo) & (opening <= hi) & (self.flag | settled)
+        return self.flag.astype(np.float32)
+
+
+def holding_flags(states, fps):
+    """HoldingDetector over one episode's measured states [T, 16] -> [T, 2]."""
+    detector = HoldingDetector(fps)
+    return np.stack([detector(s[[7, 15]]) for s in np.asarray(states)])
 
 
 def _retry(action, what, tries=4):
@@ -262,18 +305,21 @@ def tin_yaw(quaternion):
     return np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
 
 
-DATA_OPTIONS = ("gripper_command", "object_targets", "ground_truth_objects")
+DATA_OPTIONS = ("gripper_command", "holding", "release_phase", "object_targets", "ground_truth_objects")
 
 
 class MeanFlowDataset(torch.utils.data.Dataset):
-    def __init__(self, path, horizon, n_obs_steps, split="train", *, gripper_command=False, object_targets=False,
-                 ground_truth_objects=False):
+    def __init__(self, path, horizon, n_obs_steps, split="train", *, gripper_command=False, holding=False,
+                 release_phase=False, object_targets=False, ground_truth_objects=False):
         """`path`: one zarr, or a list of zarrs converted the same way (e.g. batches of simulated demos), read as
         one dataset: episodes, splits and statistics span all of them.
 
         gripper_command: add obs["gripper_command"] [T, 2], 1 where the gripper command sent at the PREVIOUS tick
         was closed (< 30 mm). Unlike the measured opening (which lags the command by ~0.4 s, hence copycat), this is
-        known the moment the policy decides to close, and tells it that the grasp has started.
+        known the moment the policy decides to close, and tells it that the grasp has started. (run10: it copied
+        it, and never closed.)
+        holding: add obs["holding"] [T, 2], HoldingDetector on the measured opening (1 = fingers hold something).
+        release_phase: the phase-weighted loss also covers releases (grasp_phase_flags).
 
         Episodes with simulated ground truth (data/tin_pose):
           object_targets: add object_target [9] (the tin centre now, and tin - TCP for each arm, metres) and
@@ -306,9 +352,11 @@ class MeanFlowDataset(torch.utils.data.Dataset):
                     self.ranges.append((int(a), int(b)))
                     self.sources.append(source)
         self.cumulative = np.cumsum([b - a for a, b in self.ranges])
-        self.phase_flags = [grasp_phase_flags(self._root(i)["data/action"][a:b], self.metadata["fps"])
+        self.phase_flags = [grasp_phase_flags(self._root(i)["data/action"][a:b], self.metadata["fps"], release_phase)
                             for i, (a, b) in enumerate(self.ranges)]
         self.gripper_command, self.object_targets = gripper_command, object_targets
+        self.holding = [holding_flags(self._root(i)["data/state"][a:b], self.metadata["fps"])
+                        for i, (a, b) in enumerate(self.ranges)] if holding else None
         if (object_targets or ground_truth_objects) and not self.has_objects:
             raise ValueError("object_targets / ground_truth_objects need a dataset converted with --object-features")
         self.objects_override, self.targets = {}, {}
@@ -368,6 +416,8 @@ class MeanFlowDataset(torch.utils.data.Dataset):
             previous = root["data/action"].oindex[np.maximum(obs_ids - 1, start)][:, [7, 15]]
             previous = np.where((obs_ids == start)[:, None], state[:, [7, 15]], previous)
             obs["gripper_command"] = torch.from_numpy((previous < .03).astype(np.float32))
+        if self.holding is not None:
+            obs["holding"] = torch.from_numpy(self.holding[ep][obs_ids - start])
         item = {"obs": obs,
                 "action": torch.from_numpy(actions), "action_valid": torch.from_numpy(valid),
                 "action_approach": torch.from_numpy(approach[local_ids] & valid[:, None]),

@@ -9,6 +9,7 @@ import torch
 
 from openarm_flow.depth_views import DepthConfig, encode_depth, resize_depth
 from openarm_flow.meanflow import MeanFlowPolicy
+from openarm_flow.meanflow_data import HoldingDetector
 from openarm_flow.rgb_views import RGBConfig, resize_rgb
 
 
@@ -94,12 +95,14 @@ class OpenArmMeanFlowPolicy:
     def _keys(self):
         return ("depth", "agent_pos", *(("rgb",) if self.rgb_config else ()),
                 *(("objects",) if self.object_features is not None else ()),
-                *(("gripper_command",) if self.policy.gripper_command_input else ()))
+                *(("gripper_command",) if self.policy.gripper_command_input else ()),
+                *(("holding",) if getattr(self.policy, "holding_input", False) else ()))
 
     def reset(self):
         self.history = deque(maxlen=self.state_steps)
         self._ensemble, self._tick = [], 0
         self.scene = None   # object-centric scene, estimated from the first observation of an episode
+        self.holding = HoldingDetector(int(self.metadata["fps"]))
         if hasattr(self, "confirmer"):
             self.confirmer.reset()
         self.generator = torch.Generator(device=self.device).manual_seed(self.seed)
@@ -127,6 +130,8 @@ class OpenArmMeanFlowPolicy:
             if command.shape != (16,):
                 raise ValueError("Expected command [16]")
             item["gripper_command"] = (command[[7, 15]] < .03).astype(np.float32)
+        if getattr(self.policy, "holding_input", False):
+            item["holding"] = self.holding(state[[7, 15]])
         if self.object_features is not None:
             if self.scene is None:
                 self.scene = self.estimator.estimate({c: np.asarray(obs["images"][f"{c}_rgb"])

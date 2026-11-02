@@ -53,7 +53,11 @@ def main():
                          "the simulated fingers wobble a few mm while the arm moves")
     ap.add_argument("--handover-before-close", type=float, metavar="SECONDS",
                     help="Diagnosis: replay the recorded joint_commands until SECONDS before the recorded gripper "
-                         "close, then hand over to the policy (isolates the final grasp from approach drift)")
+                         "close, then hand over to the policy (isolates the final grasp from approach drift); "
+                         "negative: hand over that long AFTER the close, with the tin in the fingers")
+    ap.add_argument("--gripper-rule", action="store_true",
+                    help="Diagnosis: the policy moves the arms, a rule on the true tin pose opens/closes the grippers "
+                         "(simulation/openarm_sim/gripper_rule.py)")
     ap.add_argument("--out", type=Path, default=root / "outputs/sim_meanflow")
     args = ap.parse_args()
     if args.seconds is not None and args.seconds < 0.02:
@@ -73,6 +77,7 @@ def main():
     import torch
     from PIL import Image
     from openarm_sim.composite_camera import CompositeCamera
+    from openarm_sim.gripper_rule import GripperRule
     from openarm_sim.measured_scene import compile_measured
     from openarm_sim.runner import Sim
     from openarm_sim.scene import PAD_GEOM
@@ -117,6 +122,7 @@ def main():
     background_dir = (args.config.parent / cfg["background_dir"]).resolve()
     cameras = {c: CompositeCamera.from_config(m, c, background_dir, cfg.get("composite"),
                                               rng=np.random.default_rng(args.seed)) for c in camera_names}
+    rule = GripperRule(sim, m, obj_body, cfg["objects"][obj]["size"], pad, sim.fps) if args.gripper_rule else None
     execute_steps = min(args.execute_steps or policy.chunk_size, policy.chunk_size)
     args.out.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -177,6 +183,8 @@ def main():
         states, actions, objects, frames, policy_actions = [], [], [], [], []
         last_command = sim.qpos16().copy()
         max_lift, chunk, started = 0.0, None, time.monotonic()
+        recorded_close = int(events[0]) if handover else None
+        offset_at_close = None
         for step in range(total):
             tick = time.monotonic()
             if viewer is not None and not viewer.is_running():
@@ -207,6 +215,13 @@ def main():
                 if (step - handover) % execute_steps == 0:
                     chunk = np.asarray(policy.infer()["actions"])
                 action = chunk[(step - handover) % execute_steps]
+            if rule is not None:
+                if step == recorded_close:   # where the demonstrator's TCP was when it closed (rule geometry check)
+                    offset_at_close = rule.grasp_offset(recorded_arm)
+                if step == handover:
+                    rule.reset(last_command)
+                if step >= handover:
+                    action = rule(step, action)
             states.append(sim.qpos16().copy())
             actions.append(action.copy())
             if not args.no_gif and step % 5 == 0:
@@ -243,6 +258,11 @@ def main():
                "active_arm_joint_range_rad": float(np.ptp(states[:, active], axis=0).max()),
                "inactive_arm_moved_rad": float(np.ptp(states[:, 8:15] if recorded_arm == "left" else states[:, :7], axis=0).max()),
                "wall_seconds": time.monotonic() - started}
+        if rule is not None:
+            row["rule_events"] = rule.events
+            if offset_at_close is not None:
+                off, angle, _ = offset_at_close
+                row["rule_offset_at_recorded_close_mm"] = (off * 1000).round(1).tolist() + [round(angle, 1)]
         rows.append(row)
         print(json.dumps(row), flush=True)
         np.savez_compressed(args.out / f"{episode}.npz", qpos=states, actions=actions, object_xyz=np.asarray(objects),
@@ -259,7 +279,7 @@ def main():
     summary = {"checkpoint": str(args.checkpoint), "step": policy.metadata.get("step"), "use_rgb": policy.policy.use_rgb,
                "execute_steps": execute_steps, "seed": args.seed, "episodes": len(rows),
                "handover_before_close_s": args.handover_before_close, "temporal_ensemble_decay": args.temporal_ensemble,
-               "shadow": args.shadow, "gripper_sensor": args.gripper_sensor,
+               "shadow": args.shadow, "gripper_sensor": args.gripper_sensor, "gripper_rule": args.gripper_rule,
                "close_confirm": args.close_confirm, "tin_from": tin_from,
                "gripper_checkpoint": None if args.gripper_checkpoint is None else str(args.gripper_checkpoint),
                "lift_rate": float(np.mean([r["lifted"] for r in rows])),
