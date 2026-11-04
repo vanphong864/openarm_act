@@ -84,6 +84,14 @@ class Arm:
     def tcp_pose(self, d: mujoco.MjData) -> tuple[np.ndarray, np.ndarray]:
         return d.xpos[self.tcp].copy(), d.xmat[self.tcp].reshape(3, 3).copy()
 
+    def tcp_at(self, d: mujoco.MjData, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(vị trí, hướng) TCP khi 7 khớp tay = q, các khớp khác như trong d. Không làm thay đổi `d`."""
+        s = self._scratch
+        s.qpos[:] = d.qpos
+        s.qpos[self.qadr] = q
+        mujoco.mj_kinematics(self.m, s)
+        return s.xpos[self.tcp].copy(), s.xmat[self.tcp].reshape(3, 3).copy()
+
     def jacobian(self, d: mujoco.MjData) -> np.ndarray:
         """Jacobian 6×7 của TCP theo 7 khớp tay (3 hàng vị trí m/rad, 3 hàng hướng rad/rad), theo trạng thái hiện tại."""
         jp, jr = np.zeros((3, self.m.nv)), np.zeros((3, self.m.nv))

@@ -24,6 +24,12 @@ GRASP_AXIAL = 0.024      # m, TCP lệch khỏi tâm vật dài dọc trục dà
 GRASP_AXIAL_MAX_FRAC = 0.8   # …nhưng không quá 80% nửa chiều dài vật (ngón còn ôm được vật)
 TIP_CLEARANCE = 0.003      # chừa khe giữa đầu ngón và mặt hộp khi gắp
 RELEASE_DROP = 0.02        # thả vật cao hơn độ cao kẹp (m), đo từ dữ liệu thật
+# Nâng tay trước khi tới vật: tay bắt đầu buông thấp hơn mặt hộp kê 7–10 cm; đi thẳng trong không gian khớp tới trên vật
+# thì đầu tay vừa tiến vừa nâng, quẹt vào mặt bên của hộp và qua mép hộp chỉ cao ~1.7 cm (88/88 setup chạm hộp), còn
+# người điều khiển thật qua mép ở ~8–12 cm. Nên nâng gần thẳng đứng tới độ cao tiếp cận trước, rồi mới đi ngang. Chỉ nâng
+# khi TCP thấp hơn tâm vật (tay buông); tay đã ở trên hộp (demo bắt đầu gần vật) thì đi thẳng tới trên vật như trước.
+LIFT_S = 1.0               # giây, đoạn nâng (trong không gian khớp)
+LIFT_DX = (0.0, 0.03, 0.06, 0.09)   # điểm nâng: trên TCP ban đầu, dời dần ra trước nếu IK không tới (hướng kẹp)
 VARIANTS = ("good", "grasp_offset", "early_release", "miss_target", "jerky")
 
 
@@ -34,6 +40,10 @@ class Waypoint:
     yaw: float               # góc xoay kẹp quanh trục z thế giới (rad)
     tilt: np.ndarray         # (roll, pitch) nghiêng kẹp (rad), xem arm.grasp_rot
     duration: float          # giây để đi từ mốc trước tới mốc này
+
+
+# Chỉ số các mốc trong ScriptedPickPlace.wp (0 = vị trí ban đầu, 1 = mốc nâng tay).
+ABOVE, GRASP, CLOSED, LIFTED, PLACE_ABOVE, LOWERED, RELEASED, RETREAT = 2, 3, 4, 5, 6, 7, 8, 9
 
 
 def min_jerk(s: float) -> float:
@@ -94,9 +104,11 @@ class ScriptedPickPlace:
 
     def __init__(self, arm: Arm, d, obj_pos, obj_yaw: float, target_pos, fps: int,
                  variant: str = "good", rng: np.random.Generator | None = None, max_joint_vel: float = 2.5,
-                 obj_half=(0.02, 0.02, 0.02), target_half=None, obj_body: int | None = None):
+                 obj_half=(0.02, 0.02, 0.02), target_half=None, obj_body: int | None = None,
+                 approach_s: float | None = None):
         """obj_body: id body của vật. Có thì sau khi nhấc vật lên, policy đo vật thực sự nằm đâu trong tay và chỉnh điểm
-        đặt cho tâm vật rơi đúng chỗ đã chọn (như người điều khiển nhìn rồi chỉnh); không có thì chạy hở hoàn toàn."""
+        đặt cho tâm vật rơi đúng chỗ đã chọn (như người điều khiển nhìn rồi chỉnh); không có thì chạy hở hoàn toàn.
+        approach_s: thời gian (s, trước khi chia speed) đoạn tới điểm trên vật; mặc định 1.6. Ngắn hơn khi tay đã bắt đầu gần vật."""
         rng = rng or np.random.default_rng()
         self.arm, self.fps, self.variant, self.rng = arm, fps, variant, rng
         hx, hy, hz = obj_half
@@ -185,9 +197,35 @@ class ScriptedPickPlace:
         pt = np.asarray(pt, float)
         py = gy + wrap(py - gy)
         tcp0, _ = arm.tcp_pose(d)
+        self._q_lift, lift_pos, lift_s = None, tcp0, 0.0
+        if tcp0[2] < grasp[2]:
+            R = grasp_rot(gy, *gt)
+            above = grasp + [0, 0, up]
+            best = None
+            for dx in LIFT_DX:
+                for sd in (self._q_seed, q0):
+                    start = np.array([tcp0[0] + dx, tcp0[1], above[2]])
+                    q, err = arm.ik(d, start, R, q_init=sd)
+                    score = err + 0.05 * arm.last_rot_err      # 1° lệch hướng ≈ 0.9 mm
+                    # Đoạn đi ngang chạy IK từng bước từ q (như __call__) với tốc độ khớp giới hạn: một nghiệm IK gập
+                    # khuỷu lạ phải đổi cấu hình giữa đường, tay không theo kịp và tụt xuống sát mặt hộp. Nên chấm cả sai
+                    # số bám dọc đường và phạt bước khớp lớn (12 đoạn ≈ 6 bước điều khiển, 0.25 rad ≈ 0.8 tốc độ tối đa).
+                    qq = q
+                    for s in np.linspace(0, 1, 13)[1:]:
+                        q_next, e = arm.ik(d, start + min_jerk(s) * (above - start), R, q_init=qq, iters=40)
+                        jump = float(np.abs(q_next - qq).max())
+                        score, qq = max(score, e, 0.01 * (jump > 0.25)), q_next
+                    if best is None or score < best[0]:
+                        best = (score, q)
+                if best[0] < 3e-3:
+                    break
+            # mốc nâng = nơi q_lift thực sự đưa TCP tới (đoạn nâng đi trong không gian khớp, đoạn sau nối liền từ đó)
+            self._q_lift, lift_s = best[1], LIFT_S
+            lift_pos = arm.tcp_at(d, self._q_lift)[0]
         wp = [
             Waypoint(tcp0, GRIP_OPEN, gy, np.zeros(2), 0.0),
-            Waypoint(grasp + [0, 0, up], GRIP_OPEN, gy, gt, 1.6),
+            Waypoint(lift_pos, GRIP_OPEN, gy, gt, lift_s),
+            Waypoint(grasp + [0, 0, up], GRIP_OPEN, gy, gt, approach_s or 1.6),
             Waypoint(grasp + [0, 0, z_grasp], GRIP_OPEN, gy, gt, 1.0),
             Waypoint(grasp + [0, 0, z_grasp], GRIP_CLOSED, gy, gt, 0.6),
             Waypoint(grasp + [0, 0, up], GRIP_CLOSED, gy, gt, 1.0),
@@ -201,7 +239,7 @@ class ScriptedPickPlace:
             w.duration /= speed
         self.release_step = None
         if variant == "early_release":   # nhả vật giữa đường mang tới ô đích
-            t_transport = sum(w.duration for w in wp[:5]) + rng.uniform(0.05, 0.45) * wp[5].duration
+            t_transport = sum(w.duration for w in wp[:PLACE_ABOVE]) + rng.uniform(0.05, 0.45) * wp[PLACE_ABOVE].duration
             self.release_step = int(t_transport * fps)
         self.wp = wp
         self.times = np.cumsum([w.duration for w in wp])
@@ -226,12 +264,15 @@ class ScriptedPickPlace:
     def __call__(self, d) -> np.ndarray:
         """Lệnh 8 chiều cho bước hiện tại (gọi đúng một lần mỗi bước điều khiển)."""
         t = self._t / self.fps
-        if self.obj_body is not None and not self._replanned and t >= self.times[4]:
+        if self.obj_body is not None and not self._replanned and t >= self.times[LIFTED]:
             self._replan_place(d)
         pos, grip, rot = self.target(t)
-        if t < self.times[1]:
-            # Đoạn đầu đi trong không gian khớp tới tư thế trên vật (tránh điểm kỳ dị tay duỗi thẳng ở q = 0).
-            q = self.q0 + min_jerk(t / self.times[1]) * (self._q_seed - self.q0)
+        if self._q_lift is not None and t < self.times[1]:
+            # Đoạn nâng đi trong không gian khớp (tránh điểm kỳ dị tay duỗi thẳng ở q = 0), rồi IK theo đường thẳng tới trên vật.
+            q = self.q0 + min_jerk(t / self.times[1]) * (self._q_lift - self.q0)
+        elif self._q_lift is None and t < self.times[ABOVE]:
+            # Không cần nâng (tay đã cao): đi trong không gian khớp thẳng tới tư thế trên vật.
+            q = self.q0 + min_jerk(t / self.times[ABOVE]) * (self._q_seed - self.q0)
         else:
             q, _ = self.arm.ik(d, pos, rot, q_init=self._q, iters=40)
         q = self._q + np.clip(q - self._q, -self.max_step, self.max_step)   # giới hạn tốc độ khớp
@@ -250,12 +291,12 @@ class ScriptedPickPlace:
         self._replanned = True
         tcp, R = self.arm.tcp_pose(d)
         o_local = R.T @ (d.xpos[self.obj_body] - tcp)
-        w = self.wp[6]                                     # điểm hạ vật xuống ô
+        w = self.wp[LOWERED]                               # điểm hạ vật xuống ô
         pred = w.pos + grasp_rot(w.yaw, *w.tilt) @ o_local
         delta = self._obj_goal - pred[:2]
         if np.linalg.norm(delta) > 0.05:                   # lệch quá xa = không thực sự cầm vật: giữ kế hoạch
             return
-        for w in self.wp[5:]:
+        for w in self.wp[PLACE_ABOVE:]:
             w.pos = w.pos.copy()
             w.pos[:2] += delta
 
