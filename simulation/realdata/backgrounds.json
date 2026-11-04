@@ -1,16 +1,40 @@
 {
  "all": {
-  "frames_used": 254,
+  "frames_used": 1691,
   "cameras": {
    "chest": {
-    "pixels_never_seen": 994,
+    "pixels_never_seen": 8654,
     "median_samples": 25.0,
-    "depth_invalid_fraction": 0.042353515625
+    "depth_invalid_fraction": 0.05820638020833333,
+    "colour_gain_p5_p95": [
+     [
+      0.648,
+      0.888,
+      0.965
+     ],
+     [
+      1.061,
+      1.08,
+      1.255
+     ]
+    ]
    },
    "front": {
-    "pixels_never_seen": 5672,
+    "pixels_never_seen": 540,
     "median_samples": 25.0,
-    "depth_invalid_fraction": 0.05181966145833333
+    "depth_invalid_fraction": 0.040192057291666666,
+    "colour_gain_p5_p95": [
+     [
+      0.937,
+      0.929,
+      0.9
+     ],
+     [
+      1.05,
+      1.045,
+      1.061
+     ]
+    ]
    }
   }
  }

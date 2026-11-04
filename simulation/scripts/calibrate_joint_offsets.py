@@ -65,6 +65,11 @@ def main():
     ap.add_argument("--base-sigma-mm", type=float, default=20.0,
                     help="prior tịnh tiến bệ vai (link0) mỗi tay; 0 = không fit. Offset khớp nhỏ không mô tả được độ "
                          "lệch đứng hằng số (tay phải ~ +18 mm)")
+    ap.add_argument("--base-axes", default="xyz",
+                    help="trục được phép tịnh tiến bệ vai (vd 'z': chỉ chiều đứng, giữ hai vai đối xứng theo x, y)")
+    ap.add_argument("--base-arms", nargs="+", default=["left", "right"],
+                    help="tay được tịnh tiến bệ vai; tay còn lại giữ đúng URDF làm mốc (chiều đứng chung không quan sát "
+                         "được: hai vai cùng hạ thì camera hạ theo)")
     args = ap.parse_args()
     cal = json.loads(args.cameras.read_text())
     sc = json.loads(args.scene.read_text())
@@ -121,7 +126,8 @@ def main():
         z0 = np.r_[np.zeros(7), args.axial, np.zeros(3)]
         before = {"fit": report(z0, fit), "heldout": report(z0, ho), "heldout_release_xy": report(z0, ho, "release")}
         w = 1 / (args.sigma_mm * 1e-3)
-        free = list(range(7)) + ([7] if args.free_axial else []) + ([8, 9, 10] if args.base_sigma_mm > 0 else [])
+        free = list(range(7)) + ([7] if args.free_axial else []) + \
+            ([8 + "xyz".index(a) for a in args.base_axes] if args.base_sigma_mm > 0 and arm in args.base_arms else [])
         sig_b = max(args.base_sigma_mm, 1e-6) * 1e-3
 
         def full(x):

@@ -164,12 +164,17 @@ def main():
     ap.add_argument("--no-grasp", action="store_true", help="bỏ ràng buộc hộp kẹo ↔ TCP lúc kẹp")
     ap.add_argument("--delta-axial-only", action="store_true",
                     help="tâm hộp kẹo nằm GIỮA hai ngón: chỉ cho lệch dọc trục bàn tay (z_tcp); ép camera khớp FK trên bàn")
+    ap.add_argument("--delta-z", type=float, default=None,
+                    help="cố định tâm hộp kẹo dọc trục bàn tay (m) cho cả hai tay, như calibrate_joint_offsets.py (--axial). "
+                         "Để tự do thì δz trôi cùng độ cao mặt hộp (chiều đứng không quan sát được)")
     ap.add_argument("--fy-prior", nargs="*", default=[], metavar="CAM=FY",
                     help="prior mạnh cho fy (σ 3 px) đo độc lập; fx/fy để dữ liệu quyết định")
     ap.add_argument("--fix-camera", nargs="*", default=[], choices=CAMS,
                     help="giữ nguyên toàn bộ tham số camera này (vd front đã tin cậy) và hiệu chuẩn camera còn lại theo nó")
     ap.add_argument("--intrinsics", nargs="*", default=[], metavar="CAM=FX,FY",
                     help="cố định tiêu cự đo độc lập (vd front=453,604): ICP với robot làm phồng f một cách hệ thống")
+    ap.add_argument("--joint-offsets", type=Path, default=None,
+                    help="joint_offsets_*.json: FK dùng q_encoder + Δ và tịnh tiến bệ vai ghi trong file (nếu có)")
     ap.add_argument("--sigma-plane", type=float, default=0.003)
     ap.add_argument("--rounds", type=int, nargs=3, default=[2, 3, 4], metavar=("R30", "R15", "R8"),
                     help="số vòng tương ứng ở ngưỡng ICP 30/15/8 mm")
@@ -190,6 +195,17 @@ def main():
     rng = np.random.default_rng(args.seed)
     static = ("openarm_body_link0", "openarm_left_link0", "openarm_right_link0")
     surf = RobotSurface(str(ROBOT), spacing_m=0.005, exclude_bodies=static)
+    base_t = {}
+    if args.joint_offsets:
+        base_t = {sd: v["base_translation_m"] for sd, v in json.loads(args.joint_offsets.read_text())["arms"].items()
+                  if any(v.get("base_translation_m", [0, 0, 0]))}
+
+    def shift_bases(sf):
+        """Tịnh tiến bệ vai (link0) như trong joint_offsets (vd chỉ theo z), giống measured_scene.py."""
+        for sd, t in base_t.items():
+            sf.m.body_pos[sf.m.body(f"openarm_{sd}_link0").id] += np.asarray(t)
+        return sf
+    shift_bases(surf)
     fixed_f = {}
     for spec_ in args.intrinsics:
         cam_, vals = spec_.split("=")
@@ -197,6 +213,11 @@ def main():
         init["cameras"][cam_] = {**init["cameras"][cam_], "fx": fx_, "fy": fy_}
         fixed_f[cam_] = (fx_, fy_)
     model = Model(init["cameras"], dev, init_h=init.get("box_top_height_m", 0.175) + 0.01)
+    q_off = np.zeros(16)
+    if args.joint_offsets:
+        jo = json.loads(args.joint_offsets.read_text())["arms"]
+        q_off[0:7], q_off[8:15] = jo["left"]["offsets_rad"], jo["right"]["offsets_rad"]
+        print("offset khớp (độ):", np.degrees(q_off).round(2).tolist(), flush=True)
 
     # ---- dữ liệu ICP robot
     icp_data = {}
@@ -207,20 +228,20 @@ def main():
         fit_eps = [e for e in episodes if e not in held]
         per = max(1, int(np.ceil(args.frames_per_camera / len(fit_eps))))
         frames = load_frames(args.raw, trajectory_frames(args.raw, fit_eps, arm_of, surf, K, R, C, per, rng), c, 3)
-        robot = [tuple(torch.tensor(x, device=dev, dtype=torch.float32) for x in surf.world(fr["q"])) for fr in frames]
+        robot = [tuple(torch.tensor(x, device=dev, dtype=torch.float32) for x in surf.world(fr["q"] + q_off)) for fr in frames]
         data = [tuple(torch.tensor(fr[k], device=dev, dtype=torch.float64) for k in ("u", "v", "z")) for fr in frames]
         icp_data[c] = (data, robot)
         print(f"[{c}] {len(frames)} khung ICP", flush=True)
 
     # ---- dữ liệu hộp kẹo nằm yên: khung đầu (↔ TCP lúc kẹp) và khung cuối (chỉ ràng buộc hai camera)
-    surf_tcp = RobotSurface(str(ROBOT), spacing_m=0.05)
+    surf_tcp = shift_bases(RobotSurface(str(ROBOT), spacing_m=0.05))
     tins = []      # (episode, arm, phase, tcp[3], R_tcp[3,3] | None, {cam: (u, v)})
     for ep in episodes:
         ev = hold_events(args.raw, ep, arm_of[ep])
         if ev is None:
             continue
         q_g, _, T = ev
-        surf_tcp.set_qpos(q_g)
+        surf_tcp.set_qpos(q_g + q_off)
         tid = surf_tcp.tcp[arm_of[ep]]
         tcp, Rt = surf_tcp.d.xpos[tid].copy(), surf_tcp.d.xmat[tid].reshape(3, 3).copy()
         for phase, t in (("start", 0), ("end", T - 1)):
@@ -340,6 +361,8 @@ def main():
         print(f"  [{tag}] {json.dumps(out)}", flush=True)
         return out
 
+    if args.delta_z is not None:
+        model.theta[D0 + 2] = model.theta[D0 + 5] = args.delta_z
     rep0 = {"fit": report(fit_tins, "fit, trước"), "heldout": report(ho_tins, "giữ lại, trước")}
 
     lam = 1e-3
@@ -384,6 +407,8 @@ def main():
             fixed_k |= {CAMS.index(c) * NP + j for c in args.fix_camera for j in range(NP)}
             if args.delta_axial_only:
                 fixed_k |= {D0, D0 + 1, D0 + 3, D0 + 4}
+            if args.delta_z is not None:
+                fixed_k |= {D0 + 2, D0 + 5}
             free = [k for k in range(len(model.theta)) if not (args.fix_aspect and k < 2 * NP and k % NP == 7)
                     and k != HT and k not in fixed_k]
             for _ in range(5):
@@ -432,6 +457,7 @@ def main():
     rep1["table_plane"] = tilt
     out = {"method": __doc__.split("\n")[0], "init": str(args.init), "heldout_episodes": sorted(held),
            "fixed_intrinsics": {c: {"fx": v[0], "fy": v[1]} for c, v in fixed_f.items()},
+           "joint_offsets": str(args.joint_offsets) if args.joint_offsets else None,
            "image_size": [W, H], "cameras": {c: model.export(c) for c in CAMS},
            "tin_center_in_hand_frame_m": {"left": model.theta[D0:D0 + 3].cpu().numpy().tolist(),
                                           "right": model.theta[D0 + 3:D0 + 6].cpu().numpy().tolist()},

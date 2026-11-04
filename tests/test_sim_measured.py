@@ -69,5 +69,5 @@ def test_measured_scene_compiles():
     from build_measured_scene import resolve
     m = compile_measured(resolve(cfg, raw))
     assert m.camera("chest").id >= 0 and m.camera("front").id >= 0
-    assert np.allclose(m.cam_intrinsic[m.camera("front").id][:2], [453.2, 604.3], atol=1)
+    assert np.allclose(m.cam_intrinsic[m.camera("front").id][:2], [604.3, 604.3], atol=1)
     assert m.body_gravcomp.max() == 0.0

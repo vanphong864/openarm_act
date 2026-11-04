@@ -14,7 +14,9 @@ measurements:
   joint_offsets: ../realdata/joint_offsets_20261013.json   # q_mô_hình = q_encoder + Δ
 
 composite:                           # camera ghép nền (openarm_sim/composite_camera.py)
-  dynamic_depth_scale: 1.036        # robot sim gần camera hơn depth thật ~19 mm ở ~0.5 m (scripts/sim_realism.py)
+  # depth thật / depth render trên pixel robot cùng qpos (13 episode val, 8 khung mỗi episode): front robot thật xa hơn
+  # ~16 mm, camera ngực gần hơn ~10 mm (đo lại 2026-11-04 sau hiệu chuẩn pixel vuông)
+  dynamic_depth_scale: {chest: 0.966, front: 1.023}
   # Ngoại hình lớp render, đo trên 13 episode val bằng scripts/compare_sim_images.py: màu robot/hộp kẹo thật / sim,
   # độ tương phản robot thật / sim (độ lệch chuẩn) và độ nét quanh robot (sim nét hơn ~1.5x khi chưa làm mờ).
   blur_sigma: 1.2
@@ -36,12 +38,13 @@ table:                               # bàn gỗ đỡ hộp kê; chỉ phần d
   fallback_support_z: 0.0
 
 box:                                 # null = lấy theo vùng mặt hộp nhìn thấy (scene_*.json: surface)
-  # Mép gần x ≈ 0.145: mép trên mặt hộp trong ảnh front, dải y không có robot (điểm x≈0 cùng độ cao là bàn tay/cột).
-  # Mép xa x ≈ 0.555: mặt đứng phía trước hộp hiện ở đáy ảnh front. y: vùng nhìn thấy của hai camera.
+  # Mép gần x ≈ 0.125: mép trên mặt hộp trong ảnh front, dải y không có robot (điểm x≈0 cùng độ cao là bàn tay/cột).
+  # Mép xa x ≈ 0.550: mặt đứng phía trước hộp hiện ở đáy ảnh front. y: mép trái +0.323 (ảnh camera ngực), phía phải
+  # tới hết vùng nhìn thấy (−0.295). Đo lại 2026-11-04 với camera pixel vuông (fx = fy).
   # Hộp + ô giấy xê dịch giữa các phiên (±1.5 cm): replay dịch hộp theo ô giấy của từng episode.
-  center_xy: [0.350, 0.005]
-  size_x: 0.410
-  size_y: 0.810
+  center_xy: [0.3375, 0.014]
+  size_x: 0.425
+  size_y: 0.618
   yaw_deg: 0.0
   rgba: [0.20, 0.23, 0.25, 1]
   friction: [0.8, 0.01, 0.001]
@@ -52,8 +55,9 @@ objects:
   mentos_tin:                        # khối lượng/ma sát KHÔNG đo được từ dữ liệu
     # dài × rộng × dày (m). Dày 16 mm: depth mặt trên − mặt hộp (hai camera, 281 lần đo). Rộng 44 mm: khe ngón
     # trong model ở độ mở kẹp lúc giữ (22.8 mm tay trái / 24.5 mm tay phải) — encoder kẹp đo đúng chiều bị bóp.
-    # Dài 88 mm: dài theo depth (~100 mm) trừ cùng độ phồng mép depth như chiều rộng (~8 mm mỗi phía). ±5 mm.
-    size: [0.088, 0.044, 0.016]
+    # Dài 91 mm: dài theo depth (~94 mm, không còn phụ thuộc hướng hộp kẹo khi fx = fy) trừ cùng độ phồng mép
+    # depth như chiều rộng (~47 → 44 mm). ±3 mm.
+    size: [0.091, 0.044, 0.016]
     mass: 0.045                      # ước lượng (hộp kẹo Mentos thiếc đầy); effort tay không đủ nhạy để đo
     friction: [0.6, 0.005, 0.0001]
     rgba: [0.077, 0.459, 0.229, 1]   # [0.065, 0.50, 0.30] x màu thật/sim [1.183, 0.917, 0.764] (scripts/sim_realism.py, 2 vòng)
