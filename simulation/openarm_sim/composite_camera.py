@@ -80,9 +80,12 @@ class CompositeCamera:
                     **kwargs) -> "CompositeCamera":
         """Camera `name` with the depth scale and appearance of the scene config's `composite` section."""
         composite_cfg = composite_cfg or {}
-        for key in ("dynamic_depth_scale", "blur_sigma"):
-            if key in composite_cfg:
-                kwargs.setdefault(key, composite_cfg[key])
+        for key in ("dynamic_depth_scale", "blur_sigma"):    # one value, or {camera: value}
+            v = composite_cfg.get(key)
+            if isinstance(v, dict):
+                v = v.get(name)
+            if v is not None:
+                kwargs.setdefault(key, v)
         for key in ("color_gains", "depth_dropout"):   # per camera
             if name in composite_cfg.get(key, {}):
                 kwargs.setdefault(key, composite_cfg[key][name])
@@ -100,6 +103,9 @@ class CompositeCamera:
         self.opt_static.geomgroup[:] = 0
         from .measured_scene import STATIC_GROUP
         self.opt_static.geomgroup[STATIC_GROUP] = 1
+        self._static_group, self._static_geoms = STATIC_GROUP, None
+        self._occluder_key = self._occluder_bg = None
+        self._robot_lut = None
         self.rng = rng or np.random.default_rng(0)
         self.noise, self.sigma, self.edge = noise, noise_mm_at_0p6 * 1e-3, edge_jump_m
 
@@ -111,62 +117,93 @@ class CompositeCamera:
             self.robot_geoms = np.array([g for g in range(m.ngeom) if m.geom_bodyid[g] not in free])
         return self.robot_geoms
 
-    def _dropout(self, robot: np.ndarray, objects: np.ndarray, rgb: np.ndarray) -> np.ndarray:
+    def _static_occluder(self, d: mujoco.MjData) -> np.ndarray:
+        """Depth that hides a rendered pixel minus the 3 mm margin: the real background, and the static model
+        scene where the background lost its depth. The static scene only moves between episodes (box and pad
+        shift), so its render is kept while the static geoms and the camera stay where they were."""
+        if self._static_geoms is None:
+            self._static_geoms = np.flatnonzero(self._model.geom_group == self._static_group)
+        g, cam = self._static_geoms, self._model.camera(self.name).id
+        key = b"".join(a.tobytes() for a in (d.geom_xpos[g], d.geom_xmat[g], d.cam_xpos[cam], d.cam_xmat[cam]))
+        if self._occluder_key != key or self._occluder_bg is not self.bg_depth:
+            bgz = self.bg_depth.astype(np.float64) * 1e-3
+            z_static = self.r.depth(d, self.name, self.opt_static).astype(np.float64)
+            self._bgz = bgz
+            self._occluder = np.where(bgz > 0, bgz, z_static) - 0.003
+            self._bg_depth_mm = np.where((bgz > 0.2) & (bgz < 1.2), np.rint(bgz * 1000), 0).astype(np.uint16)
+            self._occluder_key, self._occluder_bg = key, self.bg_depth
+        return self._occluder
+
+    def _dropout(self, robot: np.ndarray, objects: np.ndarray, robot_mean: np.ndarray) -> np.ndarray:
         """Pixels whose depth goes missing: a smooth random field (blobs of ~10 px, like the D435's holes)
-        thresholded at the per-pixel probability."""
+        thresholded at the per-pixel probability. robot_mean: mean colour of the `robot` pixels (in mask order)."""
         field = cv2.GaussianBlur(self.rng.normal(0, 1, robot.shape).astype(np.float32), (0, 0), 4.0)
-        u = 1 / (1 + np.exp(-1.702 * field / max(float(field.std()), 1e-6)))   # ~uniform on [0, 1]
-        p = np.zeros(robot.shape, np.float32)
+        scale = max(float(field.std()), 1e-6)
+        u = lambda mask: 1 / (1 + np.exp(-1.702 * field[mask] / scale))   # ~uniform on [0, 1]
+        drop = np.zeros(robot.shape, bool)
+        # same dtypes as a full probability map: float64 once the robot term is in, float32 otherwise
+        p_dtype = np.float64 if "robot" in self.depth_dropout else np.float32
         if "robot" in self.depth_dropout:
             dark, bright = self.depth_dropout["robot"]
-            p = np.where(robot, dark + (bright - dark) * rgb.mean(-1) / 255, p)
-        p = np.where(objects, self.depth_dropout.get("objects", 0.0), p)
-        return u < p
+            drop[robot] = u(robot) < dark + (bright - dark) * robot_mean / 255
+        drop[objects] = u(objects) < p_dtype(self.depth_dropout.get("objects", 0.0))
+        return drop
 
     def observe(self, d: mujoco.MjData) -> tuple[np.ndarray, np.ndarray]:
-        """(rgb uint8 H×W×3, depth uint16 mm H×W) như HDF5 thật."""
+        """(rgb uint8 H×W×3, depth uint16 mm H×W) như HDF5 thật.
+
+        Outside the rendered robot/objects the output is the real background, so the appearance and depth
+        models run on the rendered (front) pixels only; random fields are still drawn over the whole image
+        so the random stream matches the full-frame computation."""
         rgb = self.r.rgb(d, self.name, self.opt)
         z = self.r.depth(d, self.name, self.opt).astype(np.float64)
         self.r.r.enable_segmentation_rendering()
         self.r.r.update_scene(d, camera=self.name, scene_option=self.opt)
         seg = self.r.r.render()[..., 0]
         self.r.r.disable_segmentation_rendering()
-        dyn = seg >= 0
-        bgz = self.bg_depth.astype(np.float64) * 1e-3
-        z_static = self.r.depth(d, self.name, self.opt_static).astype(np.float64)
-        occluder = np.where(bgz > 0, bgz, z_static)       # nền thật; chỗ mất depth thì dùng cảnh tĩnh mô hình
-        front = dyn & (z < occluder - 0.003)
-        robot = np.isin(seg, self._robot_geoms())   # geoms of free bodies (task objects) are not robot
-        if self.dynamic_depth_scale != 1.0:   # task objects keep their geometric depth
-            z = np.where(robot, z * self.dynamic_depth_scale, z)
+        occluder = self._static_occluder(d)                # nền thật; chỗ mất depth thì dùng cảnh tĩnh mô hình
+        front = (seg >= 0) & (z < occluder)
+        if self._robot_lut is None:
+            self._robot_lut = np.zeros(self._model.ngeom + 1, bool)   # last entry: seg = -1 (nothing rendered)
+            self._robot_lut[self._robot_geoms()] = True
+        robot = self._robot_lut[np.clip(seg, -1, self._model.ngeom)] & (seg < self._model.ngeom)
+        robot_f = robot[front]
+        x = rgb[front]
         if self.robot_contrast != 1.0 and robot.any():   # about the robot's mean colour in this frame
             pivot = rgb[robot].mean(0)
-            rgb = np.where(robot[..., None], pivot + self.robot_contrast * (rgb - pivot), rgb)
+            x = np.where(robot_f[:, None], pivot + self.robot_contrast * (x - pivot), x)
         if self.gains:
             ones = np.ones(3, np.float32)
-            gain = np.where(robot[..., None], self.gains.get("robot", ones), self.gains.get("objects", ones))
-            rgb = rgb * gain
-        rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+            x = x * np.where(robot_f[:, None], self.gains.get("robot", ones), self.gains.get("objects", ones))
+        x = np.clip(x, 0, 255).astype(np.uint8)
+        zf = z[front]
+        if self.dynamic_depth_scale != 1.0:   # task objects keep their geometric depth
+            zf = np.where(robot_f, zf * self.dynamic_depth_scale, zf)
         if self.noise:
-            z = z + self.rng.normal(0, 1, z.shape) * self.sigma * (z / 0.6) ** 2
+            zf = zf + self.rng.normal(0, 1, z.shape)[front] * self.sigma * (zf / 0.6) ** 2
+        depth_m = self._bgz.copy()
+        depth_m[front] = zf
+        if self.noise:
             jump = np.zeros(z.shape, bool)
-            zf = np.where(front, z, bgz)
-            jump[:, 1:] |= np.abs(np.diff(zf, axis=1)) > self.edge
-            jump[1:, :] |= np.abs(np.diff(zf, axis=0)) > self.edge
-            jump = cv2.dilate(jump.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+            jump[:, 1:] |= np.abs(np.diff(depth_m, axis=1)) > self.edge
+            jump[1:, :] |= np.abs(np.diff(depth_m, axis=0)) > self.edge
+            jump_f = (cv2.dilate(jump.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)[front]
         else:
-            jump = np.zeros(z.shape, bool)
-        depth_m = np.where(front, z, bgz)
-        valid = (depth_m > 0.2) & (depth_m < 1.2) & ~(jump & front)
+            jump_f = np.zeros(len(zf), bool)
+        valid_f = (zf > 0.2) & (zf < 1.2) & ~jump_f
         if self.noise and self.depth_dropout and front.any():
-            valid &= ~self._dropout(front & robot, front & ~robot, rgb)
-        depth = np.where(valid, np.rint(depth_m * 1000), 0).astype(np.uint16)
-        out_rgb = np.where(front[..., None], rgb, self.bg_rgb)
+            fr, fo = front & robot, front & ~robot
+            valid_f &= ~self._dropout(fr, fo, x[robot_f].mean(-1))[front]
+        depth = self._bg_depth_mm.copy()
+        depth[front] = np.where(valid_f, np.rint(zf * 1000), 0).astype(np.uint16)
+        out_rgb = self.bg_rgb.copy()
+        out_rgb[front] = x
         if self.blur_sigma > 0 and front.any():   # rendered pixels and their outline only; the background is real
             region = cv2.dilate(front.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
-            out_rgb = np.where(region[..., None], cv2.GaussianBlur(out_rgb, (0, 0), self.blur_sigma), out_rgb)
+            out_rgb[region] = cv2.GaussianBlur(out_rgb, (0, 0), self.blur_sigma)[region]
         # geom id của vật động đang hiện (trước nền) ở mỗi pixel, -1 = nền thật; dùng để so vùng sim/thật.
-        self.last_segmentation = np.where(front, seg, -1)
+        self.last_segmentation = np.full(seg.shape, -1, seg.dtype)
+        self.last_segmentation[front] = seg[front]
         return out_rgb, depth
 
     def close(self) -> None:

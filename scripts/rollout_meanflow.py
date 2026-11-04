@@ -181,6 +181,7 @@ def main():
         total = round(args.seconds * sim.fps) if args.seconds else recorded_steps
         pad_center, pad_half, pad_rot = sim.d.geom_xpos[pad].copy(), m.geom_size[pad][:2].copy(), sim.d.geom_xmat[pad].reshape(3, 3).copy()
         states, actions, objects, frames, policy_actions = [], [], [], [], []
+        sim_states = []   # full MuJoCo qpos after each step, for scripts/view_rollout.py
         last_command = sim.qpos16().copy()
         max_lift, chunk, started = 0.0, None, time.monotonic()
         recorded_close = int(events[0]) if handover else None
@@ -230,6 +231,7 @@ def main():
             sim.step(action)
             if not np.isfinite(sim.d.qpos).all():
                 raise ValueError("Simulation produced nonfinite joint positions")
+            sim_states.append(sim.d.qpos.copy())
             position = sim.d.xpos[obj_body].copy()
             objects.append(position)
             max_lift = max(max_lift, float(position[2] - (box_top + half_h)))
@@ -266,7 +268,9 @@ def main():
         rows.append(row)
         print(json.dumps(row), flush=True)
         np.savez_compressed(args.out / f"{episode}.npz", qpos=states, actions=actions, object_xyz=np.asarray(objects),
-                            policy_actions=np.asarray(policy_actions))
+                            policy_actions=np.asarray(policy_actions), sim_qpos=np.asarray(sim_states), fps=sim.fps,
+                            pad_body_pos=m.body_pos[m.geom_bodyid[pad]], pad_geom_pos=m.geom_pos[pad],
+                            pad_geom_quat=m.geom_quat[pad])
         if frames:
             frames[0].save(args.out / f"{episode}.gif", save_all=True, append_images=frames[1:],
                            duration=round(5000 / sim.fps), loop=0)
